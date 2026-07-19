@@ -3,7 +3,7 @@
 const API_BASE =
   import.meta.env.VITE_API_URL ??
   (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
-const ALLOWED_EXTENSIONS = [".pdf", ".docx"];
+const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".png", ".jpg", ".jpeg"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export function validateResumeFile(file) {
@@ -15,7 +15,7 @@ export function validateResumeFile(file) {
   const isAllowed = ALLOWED_EXTENSIONS.some((ext) => name.endsWith(ext));
 
   if (!isAllowed) {
-    return "Unsupported file type. Only PDF and DOCX are allowed.";
+    return "Unsupported file type. Only PDF, DOCX, PNG, JPG, and JPEG are allowed.";
   }
 
   if (file.size > MAX_FILE_SIZE) {

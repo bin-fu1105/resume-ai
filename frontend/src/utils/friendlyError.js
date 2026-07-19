@@ -50,6 +50,25 @@ export function toFriendlyRewriteError(error) {
 }
 
 export function toFriendlyUploadError(error) {
+  let raw = "";
+
+  if (typeof error === "string") {
+    raw = error;
+  } else if (error && typeof error === "object") {
+    if (typeof error.detail === "string") {
+      raw = error.detail;
+    } else if (typeof error.message === "string") {
+      raw = error.message;
+    }
+  }
+
+  raw = raw.trim();
+
+  // Surface OCR diagnostics so missing deps / init failures are visible.
+  if (/^OCR\b|scanned document|text-based PDF/i.test(raw)) {
+    return raw;
+  }
+
   return toFriendlyError(
     error,
     "We couldn't upload your resume. Check the file and try again."

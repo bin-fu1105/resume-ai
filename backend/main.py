@@ -15,7 +15,12 @@ from services.claude_service import ClaudeService, ClaudeServiceError
 from services.compare_service import compare_resumes
 from services.interview_service import InterviewService
 from services.job_compare_service import JobCompareService
-from services.resume_parser import ResumeParseError, extract_resume_text
+from services.ocr_service import (
+    OCR_SUCCESS_MESSAGE,
+    get_resume_text,
+    probe_ocr_runtime,
+)
+from services.resume_parser import ResumeParseError
 from services.rewrite_service import RewriteService
 
 load_dotenv()
@@ -38,7 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".png", ".jpg", ".jpeg"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 # Parsed resume text keyed by upload id. Temp files are deleted after parsing;
@@ -142,13 +147,27 @@ def _store_upload_temporarily(content: bytes, extension: str) -> str:
 @app.get("/")
 def home():
     return {
-        "message": "AI Resume Assistant Backend Running!"
+        "message": "AI Resume Assistant Backend Running!",
+        "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local")[:12],
+        "ocr_service": "services.ocr_service",
+    }
+
+
+@app.get("/ocr-status")
+def ocr_status():
+    """Deploy proof: whether this runtime has OCR code + paddleocr available."""
+    runtime = probe_ocr_runtime()
+    return {
+        "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local"),
+        "ocr_service_file": "services/ocr_service.py",
+        "get_resume_text": callable(get_resume_text),
+        **runtime,
     }
 
 
 @app.post("/upload")
 async def upload_resume(file: UploadFile = File(...)):
-    """Upload a resume, parse text in a temp file, then discard the file."""
+    """Upload a resume, extract/OCR text in a temp file, then discard the file."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
 
@@ -158,7 +177,7 @@ async def upload_resume(file: UploadFile = File(...)):
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Only PDF and DOCX are allowed.",
+            detail="Unsupported file type. Only PDF, DOCX, PNG, JPG, and JPEG are allowed.",
         )
 
     content = await file.read()
@@ -175,12 +194,38 @@ async def upload_resume(file: UploadFile = File(...)):
 
     stored_name = f"{uuid.uuid4().hex}_{original_name}"
     temp_path = None
+    used_ocr = False
 
     try:
         temp_path = _store_upload_temporarily(content, extension)
-        resume_text = extract_resume_text(temp_path)
+        logging.info(
+            "Upload received name=%s extension=%s size=%s temp=%s",
+            original_name,
+            extension,
+            size,
+            temp_path,
+        )
+        resume_text, used_ocr = get_resume_text(temp_path)
+        logging.info(
+            "Upload text ready name=%s ocr_used=%s chars=%s",
+            original_name,
+            used_ocr,
+            len(resume_text or ""),
+        )
     except ResumeParseError as exc:
+        logging.error("Upload text extraction failed:\n%s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.exception("Unexpected upload failure")
+        import traceback as _tb
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Upload processing failed: {type(exc).__name__}: {exc}\n\n"
+                f"{_tb.format_exc()}"
+            ),
+        ) from exc
     finally:
         if temp_path:
             with suppress(OSError):
@@ -188,12 +233,19 @@ async def upload_resume(file: UploadFile = File(...)):
 
     _RESUME_TEXT_CACHE[stored_name] = resume_text
 
-    return {
+    response = {
         "filename": stored_name,
         "original_filename": original_name,
         "size": size,
         "status": "success",
+        "ocr_used": used_ocr,
+        "ocr_attempted": used_ocr,
+        "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local")[:12],
     }
+    if used_ocr:
+        response["message"] = OCR_SUCCESS_MESSAGE
+
+    return response
 
 
 @app.post("/analyze")

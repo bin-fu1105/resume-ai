@@ -39,24 +39,9 @@ def extract_docx_text(file_path: str) -> str:
 
 
 def extract_resume_text(file_path: str) -> str:
-    path = Path(file_path)
-    extension = path.suffix.lower()
+    """Backward-compatible helper; delegates to OCR-aware get_resume_text."""
+    # Late import avoids a circular dependency at module load time.
+    from services.ocr_service import get_resume_text
 
-    try:
-        if extension == ".pdf":
-            text = extract_pdf_text(str(path))
-        elif extension == ".docx":
-            text = extract_docx_text(str(path))
-        else:
-            raise ResumeParseError(
-                "Unsupported file type for parsing. Only PDF and DOCX are supported."
-            )
-    except ResumeParseError:
-        raise
-    except Exception as exc:
-        raise ResumeParseError(f"Failed to extract resume text: {exc}") from exc
-
-    if not text:
-        raise ResumeParseError("No readable text found in the uploaded resume.")
-
+    text, _used_ocr = get_resume_text(file_path)
     return text

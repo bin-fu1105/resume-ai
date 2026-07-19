@@ -5,3 +5,8 @@ PyMuPDF
 python-docx
 anthropic
 python-dotenv
+numpy
+Pillow
+opencv-python-headless
+onnxruntime
+paddleocr>=3.7.0

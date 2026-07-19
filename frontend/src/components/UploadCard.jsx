@@ -67,7 +67,7 @@ function UploadCard({
           Resume Upload
         </h2>
         <p className="mt-1 text-sm text-muted">
-          Drag & drop or click to upload a PDF or DOCX resume (max 10 MB).
+          Drag & drop or click to upload a PDF, DOCX, PNG, or JPG resume (max 10 MB).
         </p>
       </div>
 
@@ -130,7 +130,7 @@ function UploadCard({
                 : "Drop resume here or click to browse"}
             </span>
             <span className="mt-1 text-xs text-muted">
-              Supports .pdf and .docx
+              Supports .pdf, .docx, .png, .jpg, .jpeg
             </span>
           </>
         )}
@@ -138,7 +138,7 @@ function UploadCard({
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          accept=".pdf,.docx,.png,.jpg,.jpeg,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg"
           className="sr-only"
           aria-hidden="true"
           tabIndex={-1}
@@ -192,6 +192,9 @@ function UploadCard({
         >
           Upload successful — {uploadResult.original_filename || file?.name} (
           {formatFileSize(uploadResult.size ?? file?.size)})
+          {uploadResult.ocr_used && uploadResult.message ? (
+            <p className="mt-1">{uploadResult.message}</p>
+          ) : null}
         </div>
       )}
 
