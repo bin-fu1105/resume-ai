@@ -115,10 +115,14 @@ function UploadCard({
           <>
             <Spinner label="Uploading resume" />
             <span className="mt-3 font-display text-sm font-semibold text-ink">
-              Uploading...
+              {file && /\.(pdf|png|jpe?g)$/i.test(file.name)
+                ? "Scanned resume detected."
+                : "Uploading..."}
             </span>
-            <span className="mt-1 text-xs text-muted">
-              {uploadProgress}% complete
+            <span className="mt-1 whitespace-pre-line text-xs text-muted">
+              {file && /\.(pdf|png|jpe?g)$/i.test(file.name)
+                ? "Reading with AI Vision..."
+                : `${uploadProgress}% complete`}
             </span>
           </>
         ) : (
@@ -192,8 +196,10 @@ function UploadCard({
         >
           Upload successful — {uploadResult.original_filename || file?.name} (
           {formatFileSize(uploadResult.size ?? file?.size)})
-          {uploadResult.ocr_used && uploadResult.message ? (
-            <p className="mt-1">{uploadResult.message}</p>
+          {uploadResult.ocr_used || uploadResult.vision_used ? (
+            <p className="mt-1">
+              {uploadResult.message || "AI Vision extraction completed."}
+            </p>
           ) : null}
         </div>
       )}

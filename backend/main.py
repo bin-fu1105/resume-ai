@@ -15,9 +15,8 @@ from services.claude_service import ClaudeService, ClaudeServiceError
 from services.compare_service import compare_resumes
 from services.interview_service import InterviewService
 from services.job_compare_service import JobCompareService
-from services import ocr_service
 from services.ocr_service import (
-    OCR_SUCCESS_MESSAGE,
+    VISION_SUCCESS_MESSAGE,
     get_resume_text,
     probe_ocr_runtime,
 )
@@ -156,7 +155,7 @@ def home():
 
 @app.get("/ocr-status")
 def ocr_status():
-    """Deploy proof: whether this runtime has OCR code + paddleocr available."""
+    """Deploy proof for the Vision-based scanned-resume extraction path."""
     runtime = probe_ocr_runtime()
     return {
         "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local"),
@@ -168,7 +167,7 @@ def ocr_status():
 
 @app.post("/upload")
 async def upload_resume(file: UploadFile = File(...)):
-    """Upload a resume, extract/OCR text in a temp file, then discard the file."""
+    """Upload a resume, extract text (selectable or Claude Vision), then discard file."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
 
@@ -195,7 +194,7 @@ async def upload_resume(file: UploadFile = File(...)):
 
     stored_name = f"{uuid.uuid4().hex}_{original_name}"
     temp_path = None
-    used_ocr = False
+    used_vision = False
 
     try:
         temp_path = _store_upload_temporarily(content, extension)
@@ -206,26 +205,21 @@ async def upload_resume(file: UploadFile = File(...)):
             size,
             temp_path,
         )
-        resume_text, used_ocr = get_resume_text(temp_path)
+        resume_text, used_vision = get_resume_text(temp_path)
         logging.info(
-            "Upload text ready name=%s ocr_used=%s chars=%s",
+            "Upload text ready name=%s vision_used=%s chars=%s",
             original_name,
-            used_ocr,
+            used_vision,
             len(resume_text or ""),
         )
     except ResumeParseError as exc:
-        logging.error("Upload text extraction failed:\n%s", exc)
+        logging.error("Upload text extraction failed: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logging.exception("Unexpected upload failure")
-        import traceback as _tb
-
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"Upload processing failed: {type(exc).__name__}: {exc}\n\n"
-                f"{_tb.format_exc()}"
-            ),
+            detail=f"Upload processing failed: {type(exc).__name__}: {exc}",
         ) from exc
     finally:
         if temp_path:
@@ -239,13 +233,13 @@ async def upload_resume(file: UploadFile = File(...)):
         "original_filename": original_name,
         "size": size,
         "status": "success",
-        "ocr_used": used_ocr,
-        "ocr_attempted": used_ocr,
-        "ocr_backend": ocr_service._ocr_backend,
+        # Keep ocr_used for existing clients; means Claude Vision was used.
+        "ocr_used": used_vision,
+        "vision_used": used_vision,
         "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local")[:12],
     }
-    if used_ocr:
-        response["message"] = OCR_SUCCESS_MESSAGE
+    if used_vision:
+        response["message"] = VISION_SUCCESS_MESSAGE
 
     return response
 

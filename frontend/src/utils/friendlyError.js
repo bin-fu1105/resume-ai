@@ -64,9 +64,11 @@ export function toFriendlyUploadError(error) {
 
   raw = raw.trim();
 
-  // Surface OCR diagnostics so missing deps / init failures are visible.
-  if (/^OCR\b|scanned document|text-based PDF/i.test(raw)) {
-    return raw;
+  // Surface Vision / scanned-resume errors as returned by the backend.
+  if (/unable to read the scanned resume|scanned resume|ai vision|^OCR\b/i.test(raw)) {
+    return raw.includes("Unable to read the scanned resume.")
+      ? "Unable to read the scanned resume."
+      : raw;
   }
 
   return toFriendlyError(

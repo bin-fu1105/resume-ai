@@ -6,6 +6,3 @@ python-docx
 anthropic
 python-dotenv
 Pillow
-# Headless OpenCV avoids libxcb GUI libs missing on Vercel serverless.
-opencv-python-headless
-rapidocr-onnxruntime

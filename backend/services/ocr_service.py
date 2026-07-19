@@ -1,12 +1,10 @@
-"""Automatic resume text extraction with OCR fallback.
-
-Production (Vercel): RapidOCR — fits the 500MB serverless bundle limit.
-Local/heavy hosts: PaddleOCR when installed (preferred for EN/ZH quality).
-"""
+"""Resume text extraction: selectable PDF/DOCX text, else Claude Vision."""
 
 from __future__ import annotations
 
+import base64
 import logging
+import mimetypes
 import os
 import tempfile
 import time
@@ -16,6 +14,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import suppress
 from pathlib import Path
 
+import anthropic
 import fitz
 
 from services.resume_parser import (
@@ -27,488 +26,309 @@ from services.resume_parser import (
 logger = logging.getLogger(__name__)
 
 SELECTABLE_TEXT_THRESHOLD = 50
-OCR_TIMEOUT_SECONDS = 15
-OCR_FAIL_MESSAGE = "Unable to recognize text from the uploaded document."
-OCR_SUCCESS_MESSAGE = "Scanned resume detected. OCR completed successfully."
-OCR_TIMEOUT_MESSAGE = (
-    "This scanned document is too large.\nPlease upload a text-based PDF."
+VISION_TIMEOUT_SECONDS = 90
+VISION_MAX_PAGES = 10
+# PDF user space is 72 DPI; 180 DPI sits in the requested 150–200 range.
+VISION_DPI = 180
+VISION_FAIL_MESSAGE = "Unable to read the scanned resume."
+VISION_SUCCESS_MESSAGE = "AI Vision extraction completed."
+VISION_READING_MESSAGE = (
+    "Scanned resume detected.\nReading with AI Vision..."
+)
+
+VISION_PROMPT = (
+    "You are an OCR engine.\n"
+    "\n"
+    "Extract every visible word.\n"
+    "Preserve formatting where possible.\n"
+    "Return plain UTF-8 text only.\n"
+    "Do not summarize.\n"
+    "Do not explain."
 )
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 PDF_EXTENSION = ".pdf"
 DOCX_EXTENSION = ".docx"
 
-_ocr_engine = None
+# Kept for upload response compatibility (always Claude Vision when used).
 _ocr_backend: str | None = None
 
-
-class OcrTimeoutError(ResumeParseError):
-    """Raised when OCR exceeds the allowed wall-clock budget."""
-
-
-def _format_exception(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {exc}"
+# Backward-compatible aliases used by main.py
+OCR_SUCCESS_MESSAGE = VISION_SUCCESS_MESSAGE
+OCR_FAIL_MESSAGE = VISION_FAIL_MESSAGE
 
 
-def _traceback_text(exc: BaseException | None = None) -> str:
-    if exc is None:
-        return traceback.format_exc()
-    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-
-
-def _raise_ocr_error(prefix: str, exc: BaseException | None = None) -> None:
-    """Raise ResumeParseError with the complete traceback (never empty-text fallback)."""
-    if exc is None:
-        tb = traceback.format_exc()
-        message = prefix
-    else:
-        tb = _traceback_text(exc)
-        message = f"{prefix}: {_format_exception(exc)}"
-    logger.error("%s\n%s", message, tb)
-    print(f"OCR ERROR: {message}\n{tb}", flush=True)
-    raise ResumeParseError(f"{message}\n\n{tb}") from exc
+class VisionTimeoutError(ResumeParseError):
+    """Raised when Claude Vision exceeds the allowed wall-clock budget."""
 
 
 def probe_ocr_runtime() -> dict:
-    """Report whether OCR imports/initializes in this runtime (for deploy proof)."""
-    status: dict = {
+    """Deploy proof for the Vision-based extraction path."""
+    return {
         "ocr_service_imported": True,
-        "active_backend": _ocr_backend,
-        "engine_ready": _ocr_engine is not None,
+        "extraction_backend": "claude_vision",
+        "claude_vision_available": bool(os.getenv("ANTHROPIC_API_KEY")),
         "paddleocr_installed": False,
         "rapidocr_installed": False,
-        "claude_vision_available": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "paddleocr_import_error": None,
-        "rapidocr_import_error": None,
-        "init_error": None,
+        "vision_max_pages": VISION_MAX_PAGES,
+        "vision_dpi": VISION_DPI,
+        "note": "Production uses Claude Vision for scanned/image resumes.",
     }
 
-    try:
-        import paddleocr  # noqa: F401
 
-        status["paddleocr_installed"] = True
-        status["paddleocr_version"] = getattr(paddleocr, "__version__", "unknown")
-    except Exception as exc:
-        status["paddleocr_import_error"] = _format_exception(exc)
-
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-
-        status["rapidocr_installed"] = True
-    except Exception as exc:
-        status["rapidocr_import_error"] = _format_exception(exc)
-
-    try:
-        _get_ocr_engine()
-        status["active_backend"] = _ocr_backend
-        status["engine_ready"] = _ocr_engine is not None
-        status["initialized"] = True
-    except Exception as exc:
-        status["initialized"] = False
-        status["init_error"] = str(exc)
-
-    return status
+def _mime_for_path(path: str) -> str:
+    mime, _ = mimetypes.guess_type(path)
+    if mime in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+        return mime
+    return "image/png"
 
 
-def _init_paddleocr():
-    from paddleocr import PaddleOCR
-
-    init_attempts = (
-        {
-            "lang": "ch",
-            "engine": "onnxruntime",
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
+def _image_content_block(image_path: str) -> dict:
+    encoded = base64.standard_b64encode(Path(image_path).read_bytes()).decode("utf-8")
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": _mime_for_path(image_path),
+            "data": encoded,
         },
-        {
-            "lang": "ch",
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-        },
-        {"use_angle_cls": True, "lang": "ch", "use_gpu": False, "show_log": False},
-        {"use_angle_cls": True, "lang": "ch", "use_gpu": False},
-        {"lang": "ch"},
-        {},
+    }
+
+
+def _usage_summary(message) -> str:
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return "tokens=unavailable"
+
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    cache_read = getattr(usage, "cache_read_input_tokens", None)
+    cache_create = getattr(usage, "cache_creation_input_tokens", None)
+
+    parts = [
+        f"input_tokens={input_tokens}",
+        f"output_tokens={output_tokens}",
+    ]
+    if cache_read is not None:
+        parts.append(f"cache_read_tokens={cache_read}")
+    if cache_create is not None:
+        parts.append(f"cache_create_tokens={cache_create}")
+    return " ".join(parts)
+
+
+def _log_vision(event: str, **fields) -> None:
+    detail = " ".join(f"{key}={value}" for key, value in fields.items())
+    line = f"{event} {detail}".strip()
+    print(line, flush=True)
+    if event == "VISION FAILED":
+        logger.error(line)
+    else:
+        logger.info(line)
+
+
+def _call_claude_vision(
+    image_paths: list[str],
+    *,
+    filename: str,
+    page_count: int,
+) -> str:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ResumeParseError(VISION_FAIL_MESSAGE)
+
+    if not image_paths:
+        raise ResumeParseError(VISION_FAIL_MESSAGE)
+
+    content: list[dict] = [_image_content_block(path) for path in image_paths]
+    content.append({"type": "text", "text": VISION_PROMPT})
+
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+    client = anthropic.Anthropic(api_key=api_key)
+    started = time.monotonic()
+
+    _log_vision(
+        "VISION STARTED",
+        filename=filename,
+        page_count=page_count,
+        pages_sent=len(image_paths),
+        dpi=VISION_DPI,
+        model=model,
     )
-    errors: list[str] = []
-    for kwargs in init_attempts:
-        try:
-            engine = PaddleOCR(**kwargs)
-            logger.info("PaddleOCR initialized with keys=%s", sorted(kwargs))
-            print(f"PaddleOCR initialized successfully keys={sorted(kwargs)}", flush=True)
-            return engine
-        except Exception as exc:
-            errors.append(f"{sorted(kwargs) or ['<defaults>']}: {_format_exception(exc)}")
-            logger.exception("PaddleOCR init attempt failed")
-    raise RuntimeError(" | ".join(errors))
 
-
-def _init_rapidocr():
-    # Prefer headless OpenCV on serverless (no libxcb).
-    os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "0")
-    from rapidocr_onnxruntime import RapidOCR
-
-    engine = RapidOCR()
-    logger.info("RapidOCR initialized successfully")
-    print("RapidOCR initialized successfully", flush=True)
-    return engine
-
-
-class _ClaudeVisionOcr:
-    """Vercel-safe OCR fallback using Anthropic vision (no native GUI libs)."""
-
-    def __call__(self, image_path: str):
-        import base64
-        import mimetypes
-
-        import anthropic
-
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is not configured for Claude OCR.")
-
-        mime, _ = mimetypes.guess_type(image_path)
-        if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
-            mime = "image/png"
-
-        with open(image_path, "rb") as handle:
-            encoded = base64.standard_b64encode(handle.read()).decode("utf-8")
-
-        client = anthropic.Anthropic(api_key=api_key)
-        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    try:
         message = client.messages.create(
             model=model,
-            max_tokens=4096,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime,
-                                "data": encoded,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "Extract all readable text from this resume image. "
-                                "Return plain text only, preserving reading order. "
-                                "Do not add commentary."
-                            ),
-                        },
-                    ],
-                }
-            ],
+            max_tokens=8192,
+            messages=[{"role": "user", "content": content}],
         )
-        chunks: list[str] = []
-        for block in message.content:
-            text = getattr(block, "text", None)
-            if text:
-                chunks.append(text)
-        text = "\n".join(chunks).strip()
-        if not text:
-            return [], 0.0
-        # Match RapidOCR shape: list of [box, text, score]
-        return [[[0, 0], text, 1.0]], 0.0
-
-
-def _init_claude_ocr():
-    engine = _ClaudeVisionOcr()
-    logger.info("Claude vision OCR initialized successfully")
-    print("Claude vision OCR initialized successfully", flush=True)
-    return engine
-
-
-def _get_ocr_engine():
-    """Lazy-load OCR: PaddleOCR -> RapidOCR -> Claude vision."""
-    global _ocr_engine, _ocr_backend
-    if _ocr_engine is not None and _ocr_backend is not None:
-        logger.info("OCR engine reuse backend=%s", _ocr_backend)
-        return _ocr_engine, _ocr_backend
-
-    errors: list[str] = []
-
-    try:
-        print("OCR ENGINE INIT: trying PaddleOCR", flush=True)
-        _ocr_engine = _init_paddleocr()
-        _ocr_backend = "paddleocr"
-        return _ocr_engine, _ocr_backend
     except Exception as exc:
-        errors.append(f"PaddleOCR: {_format_exception(exc)}")
-        logger.warning("PaddleOCR unavailable: %s", _format_exception(exc))
-        print(
-            f"OCR ENGINE INIT: PaddleOCR unavailable: {_format_exception(exc)}",
-            flush=True,
+        elapsed = time.monotonic() - started
+        _log_vision(
+            "VISION FAILED",
+            filename=filename,
+            page_count=page_count,
+            elapsed_s=f"{elapsed:.2f}",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        print(traceback.format_exc(), flush=True)
+        logger.exception("Claude Vision request failed")
+        raise ResumeParseError(VISION_FAIL_MESSAGE) from None
 
-    try:
-        print("OCR ENGINE INIT: trying RapidOCR", flush=True)
-        _ocr_engine = _init_rapidocr()
-        _ocr_backend = "rapidocr"
-        return _ocr_engine, _ocr_backend
-    except Exception as exc:
-        errors.append(f"RapidOCR: {_format_exception(exc)}")
-        logger.warning("RapidOCR unavailable: %s", _format_exception(exc))
-        print(
-            f"OCR ENGINE INIT: RapidOCR unavailable: {_format_exception(exc)}",
-            flush=True,
-        )
+    chunks: list[str] = []
+    for block in message.content:
+        text = getattr(block, "text", None)
+        if text:
+            chunks.append(text)
 
-    try:
-        print("OCR ENGINE INIT: trying Claude vision OCR", flush=True)
-        _ocr_engine = _init_claude_ocr()
-        _ocr_backend = "claude_vision"
-        return _ocr_engine, _ocr_backend
-    except Exception as exc:
-        errors.append(f"ClaudeVision: {_format_exception(exc)}")
-        _raise_ocr_error(
-            "OCR unavailable (all engines failed). " + " | ".join(errors),
-            exc,
-        )
-        raise  # pragma: no cover
+    text = "\n".join(chunks).strip()
+    elapsed = time.monotonic() - started
+    usage = _usage_summary(message)
 
-
-def _lines_from_paddle_result(result) -> list[str]:
-    lines: list[str] = []
-    if result is None:
-        return lines
-
-    if isinstance(result, list) and result and not isinstance(result[0], (list, tuple)):
-        for item in result:
-            if item is None:
-                continue
-            if isinstance(item, dict):
-                texts = item.get("rec_texts") or item.get("texts") or []
-                lines.extend(str(t).strip() for t in texts if str(t).strip())
-                continue
-            texts = getattr(item, "rec_texts", None) or getattr(item, "texts", None)
-            if texts:
-                lines.extend(str(t).strip() for t in texts if str(t).strip())
-                continue
-            as_dict = getattr(item, "json", None)
-            if callable(as_dict):
-                as_dict = None
-            if as_dict is None and hasattr(item, "to_dict") and callable(item.to_dict):
-                try:
-                    as_dict = item.to_dict()
-                except Exception:
-                    as_dict = None
-            if isinstance(as_dict, dict):
-                payload = as_dict.get("res") if isinstance(as_dict.get("res"), dict) else as_dict
-                texts = payload.get("rec_texts") or payload.get("texts") or []
-                lines.extend(str(t).strip() for t in texts if str(t).strip())
-        if lines:
-            return lines
-
-    pages = result if isinstance(result, list) else [result]
-    for page in pages:
-        if not page:
-            continue
-        if isinstance(page, dict):
-            texts = page.get("rec_texts") or page.get("texts") or []
-            lines.extend(str(t).strip() for t in texts if str(t).strip())
-            continue
-        for item in page:
-            try:
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    text_info = item[1]
-                    if isinstance(text_info, (list, tuple)) and text_info:
-                        text = str(text_info[0]).strip()
-                    else:
-                        text = str(text_info).strip()
-                    if text:
-                        lines.append(text)
-            except (TypeError, ValueError, IndexError):
-                continue
-    return lines
-
-
-def _lines_from_rapid_result(result) -> list[str]:
-    lines: list[str] = []
-    if not result:
-        return lines
-    for item in result:
-        try:
-            # RapidOCR: [box, text, confidence]
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                text = str(item[1]).strip()
-                if text:
-                    lines.append(text)
-        except (TypeError, ValueError, IndexError):
-            continue
-    return lines
-
-
-def _ensure_ocr_budget(deadline: float) -> None:
-    if time.monotonic() > deadline:
-        raise OcrTimeoutError(OCR_TIMEOUT_MESSAGE)
-
-
-def _ocr_image(image_path: str, deadline: float | None = None) -> str:
-    if deadline is not None:
-        _ensure_ocr_budget(deadline)
-
-    engine, backend = _get_ocr_engine()
-    print(f"OCR RUN backend={backend} image={image_path}", flush=True)
-
-    if backend == "paddleocr":
-        result = None
-        errors: list[str] = []
-        if hasattr(engine, "predict"):
-            try:
-                result = engine.predict(image_path)
-            except Exception as exc:
-                errors.append(f"predict: {_format_exception(exc)}")
-                logger.exception("OCR predict() failed")
-        if result is None and hasattr(engine, "ocr"):
-            try:
-                try:
-                    result = engine.ocr(image_path, cls=True)
-                except TypeError:
-                    result = engine.ocr(image_path)
-            except Exception as exc:
-                errors.append(f"ocr: {_format_exception(exc)}")
-                logger.exception("OCR ocr() failed")
-        if result is None:
-            raise ResumeParseError(
-                "OCR runtime failed: "
-                + (" | ".join(errors) if errors else "no OCR method succeeded")
-            )
-        lines = _lines_from_paddle_result(result)
-    else:
-        # RapidOCR and Claude vision both expose engine(image_path) -> (rows, elapse)
-        try:
-            rapid_result, _elapse = engine(image_path)
-        except Exception as exc:
-            _raise_ocr_error(f"OCR runtime failed ({backend})", exc)
-            raise  # pragma: no cover
-        lines = _lines_from_rapid_result(rapid_result)
-
-    if deadline is not None:
-        _ensure_ocr_budget(deadline)
-
-    text = "\n".join(lines).strip()
-    logger.info(
-        "OCR image parsed backend=%s path=%s lines=%s chars=%s",
-        backend,
-        image_path,
-        len(lines),
-        len(text),
-    )
     if not text:
-        logger.error("OCR returned empty text for %s backend=%s", image_path, backend)
+        _log_vision(
+            "VISION FAILED",
+            filename=filename,
+            page_count=page_count,
+            elapsed_s=f"{elapsed:.2f}",
+            usage=usage,
+            error="empty_text",
+        )
+        raise ResumeParseError(VISION_FAIL_MESSAGE)
+
+    _log_vision(
+        "VISION FINISHED",
+        filename=filename,
+        page_count=page_count,
+        pages_sent=len(image_paths),
+        elapsed_s=f"{elapsed:.2f}",
+        chars=len(text),
+        usage=usage,
+    )
     return text
 
 
-def _ocr_pdf(pdf_path: str, deadline: float | None = None) -> str:
-    page_texts: list[str] = []
+def _pdf_pages_to_temp_images(pdf_path: str) -> tuple[list[str], int]:
+    """
+    Rasterize PDF pages to temp PNGs at VISION_DPI.
+
+    Returns (image_paths, total_page_count). Only the first VISION_MAX_PAGES
+    are rendered. Caller must delete the returned paths.
+    """
+    image_paths: list[str] = []
+    zoom = VISION_DPI / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
 
     with fitz.open(pdf_path) as document:
-        page_count = document.page_count
-        logger.info("OCR PDF page_count=%s path=%s", page_count, pdf_path)
-        print(f"OCR PDF page_count={page_count} path={pdf_path}", flush=True)
-        if page_count == 0:
-            raise ResumeParseError("OCR runtime failed: PDF has zero pages")
+        total_pages = document.page_count
+        if total_pages == 0:
+            _log_vision(
+                "VISION FAILED",
+                filename=Path(pdf_path).name,
+                page_count=0,
+                elapsed_s=0,
+                error="pdf_has_zero_pages",
+            )
+            raise ResumeParseError(VISION_FAIL_MESSAGE)
 
-        for page_index, page in enumerate(document):
-            if deadline is not None:
-                _ensure_ocr_budget(deadline)
-
-            temp_img_path = None
-            try:
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                with tempfile.NamedTemporaryFile(
-                    delete=False,
-                    suffix=".png",
-                    dir=tempfile.gettempdir(),
-                    prefix=f"ocr_page_{page_index}_",
-                ) as tmp:
-                    temp_img_path = tmp.name
-                pixmap.save(temp_img_path)
-                page_text = _ocr_image(temp_img_path, deadline=deadline)
-                if page_text:
-                    page_texts.append(page_text)
-            finally:
-                if temp_img_path:
-                    with suppress(OSError):
-                        os.unlink(temp_img_path)
-
-    text = "\n\n".join(page_texts).strip()
-    if not text:
-        raise ResumeParseError(
-            "OCR runtime failed: no text recognized on any PDF page"
-        )
-    return text
-
-
-def _run_ocr_job(file_path: str, extension: str, deadline: float) -> str:
-    print(f"OCR STARTED path={file_path} extension={extension}", flush=True)
-    logger.info("OCR STARTED path=%s extension=%s", file_path, extension)
-    started = time.monotonic()
-    try:
-        if extension == PDF_EXTENSION:
-            text = _ocr_pdf(file_path, deadline=deadline)
-        elif extension in IMAGE_EXTENSIONS:
-            text = _ocr_image(file_path, deadline=deadline)
-        else:
-            raise ResumeParseError(
-                f"OCR runtime failed: unsupported extension for OCR ({extension})"
+        pages_to_render = min(total_pages, VISION_MAX_PAGES)
+        if total_pages > VISION_MAX_PAGES:
+            logger.warning(
+                "Vision page limit applied filename=%s total_pages=%s max=%s",
+                Path(pdf_path).name,
+                total_pages,
+                VISION_MAX_PAGES,
             )
 
-        if not text or not text.strip():
-            raise ResumeParseError(OCR_FAIL_MESSAGE)
+        for page_index in range(pages_to_render):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".png",
+                dir=tempfile.gettempdir(),
+                prefix=f"vision_page_{page_index}_",
+            ) as tmp:
+                image_path = tmp.name
+            pixmap.save(image_path)
+            image_paths.append(image_path)
 
-        elapsed = time.monotonic() - started
-        print(
-            f"OCR FINISHED path={file_path} chars={len(text.strip())} "
-            f"elapsed={elapsed:.2f}s backend={_ocr_backend}",
-            flush=True,
-        )
-        logger.info(
-            "OCR FINISHED path=%s chars=%s elapsed=%.2fs backend=%s",
-            file_path,
-            len(text.strip()),
-            elapsed,
-            _ocr_backend,
-        )
-        return text.strip()
-    except Exception:
-        elapsed = time.monotonic() - started
-        print(
-            f"OCR FAILED path={file_path} elapsed={elapsed:.2f}s\n{traceback.format_exc()}",
-            flush=True,
-        )
-        logger.error(
-            "OCR FAILED path=%s elapsed=%.2fs\n%s",
-            file_path,
-            elapsed,
-            traceback.format_exc(),
-        )
-        raise
+    return image_paths, total_pages
 
 
-def _run_ocr(file_path: str, extension: str) -> str:
-    deadline = time.monotonic() + OCR_TIMEOUT_SECONDS
+def _extract_with_vision(file_path: str, extension: str) -> str:
+    global _ocr_backend
+    _ocr_backend = "claude_vision"
+
+    filename = Path(file_path).name
+    temp_images: list[str] = []
+    page_count = 1
+    started = time.monotonic()
 
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_run_ocr_job, file_path, extension, deadline)
-            return future.result(timeout=OCR_TIMEOUT_SECONDS)
-    except OcrTimeoutError:
-        raise
-    except FuturesTimeoutError as exc:
-        logger.error("OCR timed out after %ss for %s", OCR_TIMEOUT_SECONDS, file_path)
-        print(f"OCR TIMEOUT after {OCR_TIMEOUT_SECONDS}s for {file_path}", flush=True)
-        raise OcrTimeoutError(OCR_TIMEOUT_MESSAGE) from exc
+        if extension == PDF_EXTENSION:
+            temp_images, page_count = _pdf_pages_to_temp_images(file_path)
+            image_paths = temp_images
+        elif extension in IMAGE_EXTENSIONS:
+            image_paths = [file_path]
+            page_count = 1
+        else:
+            raise ResumeParseError(VISION_FAIL_MESSAGE)
+
+        return _call_claude_vision(
+            image_paths,
+            filename=filename,
+            page_count=page_count,
+        )
     except ResumeParseError:
         raise
     except Exception as exc:
-        _raise_ocr_error("OCR runtime failed", exc)
+        elapsed = time.monotonic() - started
+        _log_vision(
+            "VISION FAILED",
+            filename=filename,
+            page_count=page_count,
+            elapsed_s=f"{elapsed:.2f}",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        print(traceback.format_exc(), flush=True)
+        logger.exception("Vision extraction failed for %s", file_path)
+        raise ResumeParseError(VISION_FAIL_MESSAGE) from None
+    finally:
+        for path in temp_images:
+            with suppress(OSError):
+                os.unlink(path)
+
+
+def _run_vision_with_timeout(file_path: str, extension: str) -> str:
+    filename = Path(file_path).name
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_extract_with_vision, file_path, extension)
+            return future.result(timeout=VISION_TIMEOUT_SECONDS)
+    except VisionTimeoutError:
+        raise
+    except FuturesTimeoutError as exc:
+        _log_vision(
+            "VISION FAILED",
+            filename=filename,
+            page_count="unknown",
+            elapsed_s=VISION_TIMEOUT_SECONDS,
+            error="timeout",
+        )
+        raise ResumeParseError(VISION_FAIL_MESSAGE) from exc
+    except ResumeParseError:
+        raise
+    except Exception as exc:
+        _log_vision(
+            "VISION FAILED",
+            filename=filename,
+            page_count="unknown",
+            elapsed_s="unknown",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        print(traceback.format_exc(), flush=True)
+        logger.exception("Vision extraction failed for %s", file_path)
+        raise ResumeParseError(VISION_FAIL_MESSAGE) from None
 
 
 def get_resume_text(file_path: str) -> tuple[str, bool]:
@@ -516,10 +336,9 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
     Extract resume text from a local temp file.
 
     Returns:
-        (text, used_ocr)
+        (text, used_vision)
 
-    Never returns an empty-text fallback before OCR has been attempted for
-    PDF/image uploads.
+    Uses selectable PDF/DOCX text when available; otherwise Claude Vision.
     """
     path = Path(file_path)
     extension = path.suffix.lower()
@@ -534,13 +353,12 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
         except Exception as exc:
             logger.exception("DOCX extraction failed")
             raise ResumeParseError(
-                f"Failed to extract DOCX text: {_format_exception(exc)}\n\n"
-                f"{_traceback_text(exc)}"
+                f"Failed to extract DOCX text: {type(exc).__name__}: {exc}"
             ) from exc
         if not text:
             raise ResumeParseError(
                 "DOCX contained no extractable text. "
-                "OCR is not used for DOCX uploads."
+                "Vision is not used for DOCX uploads."
             )
         return text, False
 
@@ -548,33 +366,33 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
         try:
             selectable = extract_pdf_text(str(path)).strip()
         except Exception as exc:
-            logger.exception("PDF selectable-text extraction failed; will try OCR")
+            logger.exception("PDF selectable-text extraction failed; will use Vision")
             selectable = ""
             print(
-                f"PDF selectable text unavailable: {_format_exception(exc)}",
+                f"PDF selectable text unavailable: {type(exc).__name__}: {exc}",
                 flush=True,
             )
 
         print(
-            f"PDF selectable text chars={len(selectable)} threshold={SELECTABLE_TEXT_THRESHOLD}",
+            f"PDF selectable text chars={len(selectable)} "
+            f"threshold={SELECTABLE_TEXT_THRESHOLD}",
             flush=True,
         )
-        logger.info(
-            "PDF selectable text chars=%s threshold=%s",
-            len(selectable),
-            SELECTABLE_TEXT_THRESHOLD,
-        )
 
-        if len(selectable) > SELECTABLE_TEXT_THRESHOLD:
-            logger.info("Using selectable PDF text (OCR not required)")
+        if len(selectable) >= SELECTABLE_TEXT_THRESHOLD:
+            logger.info("Using selectable PDF text (Vision not required)")
+            print("Using selectable PDF text (Vision not required)", flush=True)
             return selectable, False
 
-        print("Selectable PDF text insufficient; invoking OCR", flush=True)
-        return _run_ocr(str(path), extension), True
+        print("Selectable PDF text insufficient; invoking Claude Vision", flush=True)
+        return _run_vision_with_timeout(str(path), extension), True
 
     if extension in IMAGE_EXTENSIONS:
-        print(f"Image upload detected; invoking OCR for {extension}", flush=True)
-        return _run_ocr(str(path), extension), True
+        print(
+            f"Image upload detected; invoking Claude Vision for {extension}",
+            flush=True,
+        )
+        return _run_vision_with_timeout(str(path), extension), True
 
     raise ResumeParseError(
         "Unsupported file type. Only PDF, DOCX, PNG, JPG, and JPEG are allowed."
