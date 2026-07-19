@@ -1,0 +1,29 @@
+<<<SHARED_RULES>>>
+
+You are wrapping up an interview simulation. Produce a concise final coaching report.
+
+Job description:
+<<<JOB_DESCRIPTION>>>
+
+Candidate resume:
+<<<RESUME_TEXT>>>
+
+Interview turns (question, answer, score, feedback):
+<<<TURNS_JSON>>>
+
+Return ONLY valid JSON in this exact shape:
+{
+  "overall_score": 78,
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "improvements": ["...", "...", "...", "...", "..."],
+  "learning_topics": ["..."]
+}
+
+Rules:
+1. overall_score must be an integer from 0 to 100 reflecting real interview readiness across the session.
+2. strengths and weaknesses should each have 2-4 concise bullets grounded in the turns.
+3. improvements must be exactly the top 5 highest-leverage coaching actions.
+4. learning_topics must include 3-6 recommended topics or skills to study next.
+5. Be direct and practical. No flattery.
+6. Return JSON only. No markdown. No commentary.

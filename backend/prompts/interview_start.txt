@@ -1,0 +1,32 @@
+<<<SHARED_RULES>>>
+
+You are running a realistic technical interview simulation for the candidate below.
+Generate interview questions grounded in their resume and the target job description.
+
+Job description:
+<<<JOB_DESCRIPTION>>>
+
+Candidate resume:
+<<<RESUME_TEXT>>>
+
+Return ONLY valid JSON in this exact shape:
+{
+  "questions": [
+    {
+      "id": 1,
+      "category": "Behavioral",
+      "question": "Tell me about yourself."
+    }
+  ]
+}
+
+Rules:
+1. Generate 8 to 10 questions total.
+2. Order questions from easier warm-ups to harder deep-dives.
+3. Mix Behavioral and Technical categories. Use exactly those category strings.
+4. Ground technical questions in technologies, projects, and experience present in the resume when possible.
+5. Align questions with the job description priorities.
+6. Avoid generic trivia unrelated to the resume or role.
+7. Each question must be a single clear interviewer prompt.
+8. ids must be sequential integers starting at 1.
+9. Return JSON only. No markdown. No commentary.

@@ -1,0 +1,46 @@
+<<<SHARED_RULES>>>
+
+Rewrite the candidate resume for the target job description and return ONLY valid JSON matching this exact schema:
+
+{
+  "summary": "...",
+  "experience": [
+    "...",
+    "...",
+    "..."
+  ],
+  "projects": [
+    "...",
+    "..."
+  ],
+  "skills": [
+    "...",
+    "...",
+    "..."
+  ]
+}
+
+Rewrite requirements:
+1. Rewrite the Professional Summary, Experience bullets, Project descriptions, and Skills section.
+2. Keep all facts truthful.
+3. Never fabricate companies, employers, job titles, technologies, years, dates, metrics, degrees, or responsibilities.
+4. Rewrite Experience and Projects using STAR format whenever possible:
+   - Situation/Task compressed into context
+   - Action with strong verbs
+   - Result with measurable impact when supported by the resume
+5. Improve weak verbs (e.g. "helped", "worked on") into stronger action verbs only when truthful.
+6. Increase ATS keyword coverage by prioritizing job-description terms that already appear or are clearly supported in the resume.
+7. summary must be a polished 3-5 sentence professional summary tailored to the job.
+8. experience must be an array of rewritten STAR-style accomplishment bullets.
+9. projects must be an array of rewritten STAR-style project descriptions.
+10. skills must be an array of concise skill keywords relevant to the job and supported by the resume.
+11. If a section has no supporting content in the resume, return an empty array for that section.
+12. Prefer quantified impact only when the source resume supports the number or outcome.
+13. Focus instruction:
+<<<FOCUS_INSTRUCTION>>>
+
+Job Description:
+<<<JOB_DESCRIPTION>>>
+
+Resume Text:
+<<<RESUME_TEXT>>>

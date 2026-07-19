@@ -1,0 +1,129 @@
+<<<SHARED_RULES>>>
+
+Analyze the resume against the job description and return ONLY valid JSON matching this exact schema:
+
+{
+  "ats_score": 0,
+  "ats_explanation": "",
+  "resume_match": {
+    "skills": 0,
+    "projects": 0,
+    "education": 0,
+    "experience": 0
+  },
+  "missing_skills": [
+    {
+      "skill": "",
+      "reason": ""
+    }
+  ],
+  "strengths": [
+    {
+      "title": "",
+      "reason": ""
+    }
+  ],
+  "suggestions": [
+    {
+      "reason": "",
+      "example": "",
+      "impact": ""
+    }
+  ],
+  "optimized_summary": "",
+  "sections": {
+    "summary": {
+      "score": 0,
+      "strengths": [],
+      "weaknesses": [],
+      "issues": [
+        {
+          "type": "",
+          "description": "",
+          "severity": "medium"
+        }
+      ],
+      "suggested_improvements": []
+    },
+    "experience": {
+      "score": 0,
+      "strengths": [],
+      "weaknesses": [],
+      "issues": [
+        {
+          "type": "",
+          "description": "",
+          "severity": "medium"
+        }
+      ],
+      "suggested_improvements": []
+    },
+    "projects": {
+      "score": 0,
+      "strengths": [],
+      "weaknesses": [],
+      "issues": [
+        {
+          "type": "",
+          "description": "",
+          "severity": "medium"
+        }
+      ],
+      "suggested_improvements": []
+    },
+    "skills": {
+      "score": 0,
+      "strengths": [],
+      "weaknesses": [],
+      "issues": [
+        {
+          "type": "",
+          "description": "",
+          "severity": "medium"
+        }
+      ],
+      "suggested_improvements": []
+    }
+  }
+}
+
+Scoring and analysis rules:
+1. ats_score must be an integer from 0 to 100 reflecting true interview probability, not optimism.
+2. ats_explanation must explain WHY the score is what it is, citing specific resume gaps or strengths against the job description.
+3. Every resume_match value must be an integer from 0 to 100 and reflect evidence quality, not wishful thinking.
+4. missing_skills must contain at least 3 objects when the job description implies gaps. Each object must include:
+   - skill: the concrete missing skill or keyword
+   - reason: why recruiters/ATS systems care for this role
+5. strengths must contain at least 3 objects. Each object must include:
+   - title: a concise strength label
+   - reason: why this strength increases interview probability
+6. suggestions must contain at least 3 objects. Every suggestion MUST include all three fields:
+   - reason: why this change matters
+   - example: a concrete rewrite or addition the candidate could use (truthful and role-relevant)
+   - impact: expected interview/ATS impact
+7. Do not write shallow suggestions like "Add projects." Always include Reason, Example, and Impact.
+8. optimized_summary must be a polished 3-5 sentence professional summary tailored to the job, using only truthful resume facts.
+9. sections is required and must include summary, experience, projects, and skills.
+10. Each section.score must be an integer from 0 to 100 for that section's ATS/interview readiness.
+11. Each section.issues item must include:
+   - type: short issue category (e.g. "keywords", "metrics", "clarity", "structure", "impact")
+   - description: concrete explanation
+   - severity: one of "low", "medium", "high"
+12. Each section must include strengths, weaknesses, and suggested_improvements as arrays of concise strings.
+13. Keep sections compact: 1-3 strengths, 1-3 weaknesses, 1-3 issues, and 1-3 suggested_improvements per section.
+14. If a section is weak or missing in the resume, give a low score and clear issues. Do not invent content.
+15. If the job description is empty, still analyze general ATS quality and focus missing_skills on common senior-recruiter red flags.
+16. Return valid complete JSON only. Prefer brevity over exhaustive lists so the response is never truncated.
+
+Example suggestion shape:
+{
+  "reason": "Projects demonstrate applied ability beyond buzzwords.",
+  "example": "Built an AI Resume Optimizer using React, FastAPI, and Claude API that improved ATS keyword coverage and recruiter readability.",
+  "impact": "Shows real-world engineering experience and product delivery, increasing interview probability for full-stack roles."
+}
+
+Job Description:
+<<<JOB_DESCRIPTION>>>
+
+Resume Text:
+<<<RESUME_TEXT>>>

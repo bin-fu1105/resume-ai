@@ -1,0 +1,143 @@
+{
+  "legacy_analysis": {
+    "ats_score": 72,
+    "resume_match": {
+      "skills": 82,
+      "projects": 85,
+      "education": 0,
+      "experience": 68
+    },
+    "missing_skills": [
+      "REST APIs (explicit mention)",
+      "Measurable/quantified product impact (metrics, KPIs)",
+      "CI/CD pipelines",
+      "Cloud platforms (AWS/GCP/Azure)",
+      "Automated testing frameworks",
+      "Education details"
+    ],
+    "strengths": [
+      "Strong direct match on core technical stack: Python, React, Docker, and PostgreSQL",
+      "Relevant hands-on experience building SaaS APIs and dashboards in a production environment",
+      "Practical project experience combining frontend, backend API, and containerized deployment",
+      "Clear full stack engineering title alignment with the job role"
+    ],
+    "suggestions": [
+      "Explicitly mention 'REST APIs' in skills and experience sections to match keyword requirements",
+      "Add quantifiable metrics to achievements, such as performance improvements, uptime percentages, or user growth",
+      "Include an education section with degree, institution, and graduation year for completeness",
+      "Highlight CI/CD, cloud infrastructure, or testing experience if applicable to strengthen technical breadth",
+      "Expand the summary to emphasize measurable product delivery impact and cross-functional collaboration"
+    ],
+    "optimized_summary": "Full Stack Engineer with 3+ years of experience building scalable SaaS products using Python, React, Docker, and PostgreSQL. Proven track record designing and deploying REST APIs, improving deployment reliability through containerization, and delivering end-to-end features from database to UI. Skilled in cross-functional collaboration to ship production-grade inventory and dashboard platforms. Adept at translating business requirements into measurable technical outcomes. Seeking to leverage strong full stack expertise to drive impactful product delivery in a fast-paced engineering team."
+  },
+  "new_analysis": {
+    "ats_score": 58,
+    "ats_explanation": "Core technical keywords (Python, React, Docker, PostgreSQL) are present and directly match the job description, which will pass initial ATS keyword filtering. However, the resume never explicitly states 'REST API' despite the JD requiring it, has zero quantified metrics anywhere (no percentages, user counts, latency improvements, or team size), and completely omits an education section, which most ATS parsers and recruiters flag as a red flag or auto-reject trigger for junior-to-mid engineering roles. The 3-year tenure at one company is a positive signal, but the lack of measurable product delivery evidence (explicitly required in the JD) significantly weakens interview probability despite strong keyword overlap.",
+    "resume_match": {
+      "education": 5,
+      "experience": 50,
+      "projects": 55,
+      "skills": 75
+    },
+    "missing_skills": [
+      {
+        "skill": "REST APIs (explicit mention)",
+        "reason": "The JD explicitly lists REST APIs as a requirement. The resume only says 'Built SaaS APIs' without confirming REST architecture, so ATS keyword matching may not credit this requirement, and recruiters skimming will not confirm the skill without seeing the term explicitly."
+      },
+      {
+        "skill": "Measurable product delivery metrics",
+        "reason": "The JD explicitly asks for 'measurable product delivery experience.' Every bullet in the resume is task-based ('Built,' 'Improved,' 'Worked on') with no numbers, so there is no evidence of impact, which recruiters use to differentiate candidates at the interview screening stage."
+      },
+      {
+        "skill": "Education credentials",
+        "reason": "No education section exists anywhere in the resume. Most corporate ATS systems and recruiter screens expect at minimum a degree, bootcamp, or explicit statement of equivalent experience; its complete absence can trigger automatic disqualification or recruiter skepticism about the candidate's background."
+      },
+      {
+        "skill": "CI/CD or cloud deployment tools (AWS/GCP/Azure)",
+        "reason": "Full stack roles requiring Docker frequently expect familiarity with cloud infrastructure or CI/CD pipelines. The resume mentions 'containerized deployment' but never names a cloud provider or pipeline tool, leaving a plausible skill gap for infrastructure-adjacent responsibilities."
+      }
+    ],
+    "strengths": [
+      {
+        "title": "Direct tech stack alignment",
+        "reason": "Python, React, Docker, and PostgreSQL are all explicitly listed and reinforced in both experience and project sections, which directly matches 4 of the 5 core JD requirements and will register strongly in ATS keyword scans."
+      },
+      {
+        "title": "Consistent 3-year tenure",
+        "reason": "A single employer from 2021-2024 signals stability and reduces recruiter concern about job-hopping, which is a common filter for mid-level engineering roles."
+      },
+      {
+        "title": "Project reinforces stated skills",
+        "reason": "The Inventory Platform project uses the same React/Python/Docker stack as the job listing, giving recruiters a second, independent data point that the candidate has hands-on experience beyond a single employer's stack."
+      }
+    ],
+    "suggestions": [
+      {
+        "reason": "The JD explicitly requires 'measurable product delivery experience,' but no bullet in the resume contains a number, percentage, or scale indicator, making it impossible for a recruiter to assess actual impact versus routine task completion.",
+        "example": "Change 'Improved deploy reliability with Docker' to 'Reduced deployment failures by 30% by migrating manual deploys to Docker-based CI pipeline, cutting release time from 2 hours to 20 minutes.'",
+        "impact": "Quantified metrics directly address the JD's stated requirement and are the single highest-leverage change for increasing recruiter callback rate on this resume."
+      },
+      {
+        "reason": "The resume never uses the exact phrase 'REST API,' which is a named requirement in the job description; ATS systems commonly perform exact or near-exact keyword matching, so an implied skill may not register as a match.",
+        "example": "Change 'Built SaaS APIs and dashboards' to 'Designed and built RESTful APIs (Python/Flask or FastAPI) powering SaaS dashboards consumed by [X] internal/external users.'",
+        "impact": "Improves ATS keyword match rate for a JD-required term and gives recruiters explicit confirmation of REST API design experience."
+      },
+      {
+        "reason": "There is no education section in the resume, which is unusual and can cause both ATS parsing errors (some systems expect a degree field) and recruiter hesitation about verifying baseline qualifications.",
+        "example": "Add a section: 'Education: B.S. in Computer Science, [University Name], [Year]' or, if no formal degree exists, state 'Self-taught engineer with [X] years professional experience; completed [specific bootcamp/certification] in [year].'",
+        "impact": "Removes a common automatic disqualification trigger in corporate ATS filters and closes a credibility gap for recruiters screening the resume."
+      },
+      {
+        "reason": "The summary is generic ('experience building SaaS products') and does not mention any of the JD's named technologies or years of experience, reducing its effectiveness as an ATS keyword anchor and recruiter first-impression tool.",
+        "example": "Replace with: 'Full Stack Engineer with 3 years of experience building SaaS products using Python, React, Docker, and PostgreSQL, with hands-on ownership of API development and containerized deployments.'",
+        "impact": "A keyword-dense, specific summary improves ATS ranking and gives recruiters an immediate skills match in the first 5 seconds of resume review."
+      }
+    ],
+    "optimized_summary": "Full Stack Engineer with 3 years of professional experience building SaaS products using Python, React, Docker, and PostgreSQL. Experienced in developing backend APIs and frontend dashboards, and in containerizing applications to improve deployment reliability. Hands-on project experience extending the same stack to build an inventory tracking platform with containerized deployment. Seeking to bring full stack ownership and delivery experience to a team building measurable, production-scale features."
+  },
+  "legacy_rewrite": {
+    "summary": "Full Stack Engineer with hands-on experience building and delivering SaaS products using Python, React, Docker, and PostgreSQL. Skilled in developing REST APIs, designing responsive front-end interfaces, and improving deployment reliability through containerization. Proven ability to collaborate across teams to ship production-ready features and optimize database performance. Passionate about writing clean, maintainable code and delivering measurable product impact.",
+    "experience": [
+      "Developed and maintained SaaS APIs and interactive dashboards using Python and React, supporting core product functionality",
+      "Enhanced deployment reliability and consistency by containerizing services with Docker, streamlining release workflows",
+      "Wrote and optimized PostgreSQL queries to support backend data operations and improve application performance"
+    ],
+    "projects": [
+      "Built an Inventory Platform featuring a React front-end and Python-based REST API to enable real-time inventory tracking",
+      "Collaborated with the team to containerize the application and deploy it via Docker, improving deployment consistency and scalability"
+    ],
+    "skills": [
+      "Python",
+      "React",
+      "Docker",
+      "PostgreSQL",
+      "REST APIs",
+      "JavaScript",
+      "SaaS Development",
+      "Database Query Optimization",
+      "Containerized Deployment"
+    ]
+  },
+  "new_rewrite": {
+    "summary": "Full Stack Engineer with three years of experience building SaaS products using Python, React, PostgreSQL, and Docker. Proven ability to design and maintain backend APIs and front-end dashboards that support core product functionality. Experienced in improving deployment reliability through containerization and optimizing database queries for performance. Comfortable working across the full stack to deliver functional, maintainable software.",
+    "experience": [
+      "Engineered and maintained SaaS APIs and front-end dashboards at BrightApps, enabling core product functionality for end users (2021-2024).",
+      "Implemented Docker containerization to improve deployment reliability and consistency across environments.",
+      "Optimized PostgreSQL database queries to support application data access and improve backend performance."
+    ],
+    "projects": [
+      "Built a full-stack Inventory Platform using a React front-end and a Python API backend to support inventory tracking functionality.",
+      "Collaborated with a team to containerize the application using Docker, streamlining the deployment process."
+    ],
+    "skills": [
+      "Python",
+      "React",
+      "JavaScript",
+      "PostgreSQL",
+      "Docker",
+      "API Development",
+      "Full Stack Development",
+      "SaaS Applications"
+    ]
+  }
+}
