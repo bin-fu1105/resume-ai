@@ -1,0 +1,6 @@
+# Optional local/heavy OCR stack (NOT for Vercel — exceeds 500MB function limit).
+-r requirements.txt
+numpy
+opencv-python-headless
+onnxruntime
+paddleocr>=3.7.0

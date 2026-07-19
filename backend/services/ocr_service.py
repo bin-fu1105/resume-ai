@@ -1,4 +1,8 @@
-"""Automatic resume text extraction with optional PaddleOCR fallback."""
+"""Automatic resume text extraction with OCR fallback.
+
+Production (Vercel): RapidOCR — fits the 500MB serverless bundle limit.
+Local/heavy hosts: PaddleOCR when installed (preferred for EN/ZH quality).
+"""
 
 from __future__ import annotations
 
@@ -35,6 +39,7 @@ PDF_EXTENSION = ".pdf"
 DOCX_EXTENSION = ".docx"
 
 _ocr_engine = None
+_ocr_backend: str | None = None
 
 
 class OcrTimeoutError(ResumeParseError):
@@ -60,56 +65,53 @@ def _raise_ocr_error(prefix: str, exc: BaseException | None = None) -> None:
         tb = _traceback_text(exc)
         message = f"{prefix}: {_format_exception(exc)}"
     logger.error("%s\n%s", message, tb)
+    print(f"OCR ERROR: {message}\n{tb}", flush=True)
     raise ResumeParseError(f"{message}\n\n{tb}") from exc
 
 
 def probe_ocr_runtime() -> dict:
     """Report whether OCR imports/initializes in this runtime (for deploy proof)."""
-    status = {
+    status: dict = {
         "ocr_service_imported": True,
-        "paddleocr_installed": False,
-        "paddleocr_import_error": None,
-        "paddleocr_initialized": False,
-        "paddleocr_init_error": None,
+        "active_backend": _ocr_backend,
         "engine_ready": _ocr_engine is not None,
+        "paddleocr_installed": False,
+        "rapidocr_installed": False,
+        "paddleocr_import_error": None,
+        "rapidocr_import_error": None,
+        "init_error": None,
     }
+
     try:
         import paddleocr  # noqa: F401
-        from paddleocr import PaddleOCR  # noqa: F401
 
         status["paddleocr_installed"] = True
-        status["paddleocr_version"] = getattr(
-            __import__("paddleocr"), "__version__", "unknown"
-        )
+        status["paddleocr_version"] = getattr(paddleocr, "__version__", "unknown")
     except Exception as exc:
         status["paddleocr_import_error"] = _format_exception(exc)
-        status["paddleocr_import_traceback"] = _traceback_text(exc)
-        return status
+
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+
+        status["rapidocr_installed"] = True
+    except Exception as exc:
+        status["rapidocr_import_error"] = _format_exception(exc)
 
     try:
         _get_ocr_engine()
-        status["paddleocr_initialized"] = True
-        status["engine_ready"] = True
+        status["active_backend"] = _ocr_backend
+        status["engine_ready"] = _ocr_engine is not None
+        status["initialized"] = True
     except Exception as exc:
-        status["paddleocr_init_error"] = str(exc)
+        status["initialized"] = False
+        status["init_error"] = str(exc)
+
     return status
 
 
-def _get_ocr_engine():
-    """Lazy-load PaddleOCR (Chinese + English). Heavy import deferred until needed."""
-    global _ocr_engine
-    if _ocr_engine is not None:
-        logger.info("PaddleOCR engine reuse (already initialized)")
-        return _ocr_engine
+def _init_paddleocr():
+    from paddleocr import PaddleOCR
 
-    logger.info("PaddleOCR import starting")
-    try:
-        from paddleocr import PaddleOCR
-    except Exception as exc:
-        logger.exception("PaddleOCR import failed")
-        _raise_ocr_error("OCR unavailable (import failed)", exc)
-
-    # Prefer PaddleOCR 3.x ONNX runtime (portable). Fall back to classic 2.x init.
     init_attempts = (
         {
             "lang": "ch",
@@ -124,98 +126,98 @@ def _get_ocr_engine():
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
         },
-        {
-            "use_angle_cls": True,
-            "lang": "ch",
-            "use_gpu": False,
-            "show_log": False,
-        },
-        {
-            "use_angle_cls": True,
-            "lang": "ch",
-            "use_gpu": False,
-        },
-        {
-            "lang": "ch",
-        },
+        {"use_angle_cls": True, "lang": "ch", "use_gpu": False, "show_log": False},
+        {"use_angle_cls": True, "lang": "ch", "use_gpu": False},
+        {"lang": "ch"},
         {},
     )
-
     errors: list[str] = []
     for kwargs in init_attempts:
         try:
-            logger.info("PaddleOCR init attempt with keys=%s", sorted(kwargs))
             engine = PaddleOCR(**kwargs)
-            _ocr_engine = engine
-            logger.info(
-                "PaddleOCR initialized successfully with keys=%s",
-                sorted(kwargs),
-            )
-            return _ocr_engine
+            logger.info("PaddleOCR initialized with keys=%s", sorted(kwargs))
+            print(f"PaddleOCR initialized successfully keys={sorted(kwargs)}", flush=True)
+            return engine
         except Exception as exc:
-            message = _format_exception(exc)
-            errors.append(f"{sorted(kwargs) or ['<defaults>']}: {message}")
-            logger.exception("PaddleOCR init attempt failed for keys=%s", sorted(kwargs))
-
-    detail = " | ".join(errors) if errors else "unknown initialization error"
-    logger.error("PaddleOCR init failed after all attempts: %s", detail)
-    raise ResumeParseError(
-        "OCR unavailable (init failed): "
-        f"{detail}\n\n"
-        "Complete init attempt errors are listed above."
-    )
+            errors.append(f"{sorted(kwargs) or ['<defaults>']}: {_format_exception(exc)}")
+            logger.exception("PaddleOCR init attempt failed")
+    raise RuntimeError(" | ".join(errors))
 
 
-def _lines_from_ocr_result(result) -> list[str]:
-    """Normalize PaddleOCR 2.x / 3.x output into plain text lines."""
+def _init_rapidocr():
+    from rapidocr_onnxruntime import RapidOCR
+
+    engine = RapidOCR()
+    logger.info("RapidOCR initialized successfully")
+    print("RapidOCR initialized successfully", flush=True)
+    return engine
+
+
+def _get_ocr_engine():
+    """Lazy-load OCR. Prefer PaddleOCR; fall back to RapidOCR for Vercel size limits."""
+    global _ocr_engine, _ocr_backend
+    if _ocr_engine is not None and _ocr_backend is not None:
+        logger.info("OCR engine reuse backend=%s", _ocr_backend)
+        return _ocr_engine, _ocr_backend
+
+    paddle_error = None
+    try:
+        print("OCR ENGINE INIT: trying PaddleOCR", flush=True)
+        _ocr_engine = _init_paddleocr()
+        _ocr_backend = "paddleocr"
+        return _ocr_engine, _ocr_backend
+    except Exception as exc:
+        paddle_error = exc
+        logger.warning("PaddleOCR unavailable: %s", _format_exception(exc))
+        print(
+            f"OCR ENGINE INIT: PaddleOCR unavailable: {_format_exception(exc)}",
+            flush=True,
+        )
+
+    try:
+        print("OCR ENGINE INIT: trying RapidOCR", flush=True)
+        _ocr_engine = _init_rapidocr()
+        _ocr_backend = "rapidocr"
+        return _ocr_engine, _ocr_backend
+    except Exception as rapid_error:
+        _raise_ocr_error(
+            "OCR unavailable (PaddleOCR and RapidOCR both failed). "
+            f"PaddleOCR: {_format_exception(paddle_error) if paddle_error else 'n/a'}; "
+            f"RapidOCR: {_format_exception(rapid_error)}",
+            rapid_error,
+        )
+        raise  # pragma: no cover
+
+
+def _lines_from_paddle_result(result) -> list[str]:
     lines: list[str] = []
     if result is None:
         return lines
 
-    # PaddleOCR 3.x: predict() may return a list of result objects/dicts.
     if isinstance(result, list) and result and not isinstance(result[0], (list, tuple)):
         for item in result:
             if item is None:
                 continue
             if isinstance(item, dict):
                 texts = item.get("rec_texts") or item.get("texts") or []
-                for text in texts:
-                    cleaned = str(text).strip()
-                    if cleaned:
-                        lines.append(cleaned)
+                lines.extend(str(t).strip() for t in texts if str(t).strip())
                 continue
-
             texts = getattr(item, "rec_texts", None) or getattr(item, "texts", None)
             if texts:
-                for text in texts:
-                    cleaned = str(text).strip()
-                    if cleaned:
-                        lines.append(cleaned)
+                lines.extend(str(t).strip() for t in texts if str(t).strip())
                 continue
-
             as_dict = getattr(item, "json", None)
             if callable(as_dict):
                 as_dict = None
             if as_dict is None and hasattr(item, "to_dict") and callable(item.to_dict):
                 try:
                     as_dict = item.to_dict()
-                except Exception as exc:
-                    logger.warning(
-                        "OCR result to_dict failed: %s", _format_exception(exc)
-                    )
+                except Exception:
                     as_dict = None
             if isinstance(as_dict, dict):
-                res_payload = as_dict.get("res") if isinstance(as_dict.get("res"), dict) else as_dict
-                texts = (
-                    res_payload.get("rec_texts")
-                    or res_payload.get("texts")
-                    or []
-                )
-                for text in texts:
-                    cleaned = str(text).strip()
-                    if cleaned:
-                        lines.append(cleaned)
-
+                payload = as_dict.get("res") if isinstance(as_dict.get("res"), dict) else as_dict
+                texts = payload.get("rec_texts") or payload.get("texts") or []
+                lines.extend(str(t).strip() for t in texts if str(t).strip())
         if lines:
             return lines
 
@@ -225,15 +227,10 @@ def _lines_from_ocr_result(result) -> list[str]:
             continue
         if isinstance(page, dict):
             texts = page.get("rec_texts") or page.get("texts") or []
-            for text in texts:
-                cleaned = str(text).strip()
-                if cleaned:
-                    lines.append(cleaned)
+            lines.extend(str(t).strip() for t in texts if str(t).strip())
             continue
-
         for item in page:
             try:
-                # Classic 2.x shape: [box, (text, confidence)]
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     text_info = item[1]
                     if isinstance(text_info, (list, tuple)) and text_info:
@@ -242,10 +239,24 @@ def _lines_from_ocr_result(result) -> list[str]:
                         text = str(text_info).strip()
                     if text:
                         lines.append(text)
-            except (TypeError, ValueError, IndexError) as exc:
-                logger.warning("Skipping OCR line parse error: %s", _format_exception(exc))
+            except (TypeError, ValueError, IndexError):
                 continue
+    return lines
 
+
+def _lines_from_rapid_result(result) -> list[str]:
+    lines: list[str] = []
+    if not result:
+        return lines
+    for item in result:
+        try:
+            # RapidOCR: [box, text, confidence]
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                text = str(item[1]).strip()
+                if text:
+                    lines.append(text)
+        except (TypeError, ValueError, IndexError):
+            continue
     return lines
 
 
@@ -258,68 +269,64 @@ def _ocr_image(image_path: str, deadline: float | None = None) -> str:
     if deadline is not None:
         _ensure_ocr_budget(deadline)
 
-    engine = _get_ocr_engine()
-    errors: list[str] = []
-    result = None
+    engine, backend = _get_ocr_engine()
+    print(f"OCR RUN backend={backend} image={image_path}", flush=True)
 
-    if hasattr(engine, "predict"):
-        try:
-            logger.info("OCR predict() on %s", image_path)
-            result = engine.predict(image_path)
-        except Exception as exc:
-            message = _format_exception(exc)
-            errors.append(f"predict: {message}")
-            logger.exception("OCR predict() failed for %s", image_path)
-            result = None
-
-    if result is None and hasattr(engine, "ocr"):
-        try:
-            logger.info("OCR ocr() on %s", image_path)
+    if backend == "paddleocr":
+        result = None
+        errors: list[str] = []
+        if hasattr(engine, "predict"):
             try:
-                result = engine.ocr(image_path, cls=True)
-            except TypeError:
-                result = engine.ocr(image_path)
+                result = engine.predict(image_path)
+            except Exception as exc:
+                errors.append(f"predict: {_format_exception(exc)}")
+                logger.exception("OCR predict() failed")
+        if result is None and hasattr(engine, "ocr"):
+            try:
+                try:
+                    result = engine.ocr(image_path, cls=True)
+                except TypeError:
+                    result = engine.ocr(image_path)
+            except Exception as exc:
+                errors.append(f"ocr: {_format_exception(exc)}")
+                logger.exception("OCR ocr() failed")
+        if result is None:
+            raise ResumeParseError(
+                "OCR runtime failed: "
+                + (" | ".join(errors) if errors else "no OCR method succeeded")
+            )
+        lines = _lines_from_paddle_result(result)
+    else:
+        try:
+            rapid_result, _elapse = engine(image_path)
         except Exception as exc:
-            message = _format_exception(exc)
-            errors.append(f"ocr: {message}")
-            logger.exception("OCR ocr() failed for %s", image_path)
-            result = None
+            _raise_ocr_error("OCR runtime failed (RapidOCR)", exc)
+            raise  # pragma: no cover
+        lines = _lines_from_rapid_result(rapid_result)
 
     if deadline is not None:
         _ensure_ocr_budget(deadline)
 
-    if result is None:
-        detail = " | ".join(errors) if errors else "no OCR method succeeded"
-        raise ResumeParseError(
-            f"OCR runtime failed: {detail}\n\n"
-            "OCR was attempted but predict()/ocr() produced no result."
-        )
-
-    lines = _lines_from_ocr_result(result)
     text = "\n".join(lines).strip()
     logger.info(
-        "OCR image parsed path=%s lines=%s chars=%s result_type=%s",
+        "OCR image parsed backend=%s path=%s lines=%s chars=%s",
+        backend,
         image_path,
         len(lines),
         len(text),
-        type(result).__name__,
     )
     if not text:
-        logger.error(
-            "OCR returned empty text for %s; raw result preview=%r",
-            image_path,
-            repr(result)[:1000],
-        )
+        logger.error("OCR returned empty text for %s backend=%s", image_path, backend)
     return text
 
 
 def _ocr_pdf(pdf_path: str, deadline: float | None = None) -> str:
-    """Rasterize each PDF page to a temp PNG, OCR it, then delete the image."""
     page_texts: list[str] = []
 
     with fitz.open(pdf_path) as document:
         page_count = document.page_count
         logger.info("OCR PDF page_count=%s path=%s", page_count, pdf_path)
+        print(f"OCR PDF page_count={page_count} path={pdf_path}", flush=True)
         if page_count == 0:
             raise ResumeParseError("OCR runtime failed: PDF has zero pages")
 
@@ -338,12 +345,6 @@ def _ocr_pdf(pdf_path: str, deadline: float | None = None) -> str:
                 ) as tmp:
                     temp_img_path = tmp.name
                 pixmap.save(temp_img_path)
-                logger.info(
-                    "OCR PDF rendered page=%s/%s -> %s",
-                    page_index + 1,
-                    page_count,
-                    temp_img_path,
-                )
                 page_text = _ocr_image(temp_img_path, deadline=deadline)
                 if page_text:
                     page_texts.append(page_text)
@@ -361,6 +362,7 @@ def _ocr_pdf(pdf_path: str, deadline: float | None = None) -> str:
 
 
 def _run_ocr_job(file_path: str, extension: str, deadline: float) -> str:
+    print(f"OCR STARTED path={file_path} extension={extension}", flush=True)
     logger.info("OCR STARTED path=%s extension=%s", file_path, extension)
     started = time.monotonic()
     try:
@@ -377,15 +379,25 @@ def _run_ocr_job(file_path: str, extension: str, deadline: float) -> str:
             raise ResumeParseError(OCR_FAIL_MESSAGE)
 
         elapsed = time.monotonic() - started
+        print(
+            f"OCR FINISHED path={file_path} chars={len(text.strip())} "
+            f"elapsed={elapsed:.2f}s backend={_ocr_backend}",
+            flush=True,
+        )
         logger.info(
-            "OCR FINISHED path=%s chars=%s elapsed=%.2fs",
+            "OCR FINISHED path=%s chars=%s elapsed=%.2fs backend=%s",
             file_path,
             len(text.strip()),
             elapsed,
+            _ocr_backend,
         )
         return text.strip()
     except Exception:
         elapsed = time.monotonic() - started
+        print(
+            f"OCR FAILED path={file_path} elapsed={elapsed:.2f}s\n{traceback.format_exc()}",
+            flush=True,
+        )
         logger.error(
             "OCR FAILED path=%s elapsed=%.2fs\n%s",
             file_path,
@@ -405,9 +417,8 @@ def _run_ocr(file_path: str, extension: str) -> str:
     except OcrTimeoutError:
         raise
     except FuturesTimeoutError as exc:
-        logger.error(
-            "OCR timed out after %ss for %s", OCR_TIMEOUT_SECONDS, file_path
-        )
+        logger.error("OCR timed out after %ss for %s", OCR_TIMEOUT_SECONDS, file_path)
+        print(f"OCR TIMEOUT after {OCR_TIMEOUT_SECONDS}s for {file_path}", flush=True)
         raise OcrTimeoutError(OCR_TIMEOUT_MESSAGE) from exc
     except ResumeParseError:
         raise
@@ -422,13 +433,13 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
     Returns:
         (text, used_ocr)
 
-    Automatically uses selectable PDF/DOCX text when available, otherwise OCR.
     Never returns an empty-text fallback before OCR has been attempted for
     PDF/image uploads.
     """
     path = Path(file_path)
     extension = path.suffix.lower()
     logger.info("get_resume_text start path=%s extension=%s", path, extension)
+    print(f"get_resume_text start path={path} extension={extension}", flush=True)
 
     if extension == DOCX_EXTENSION:
         try:
@@ -454,10 +465,15 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
         except Exception as exc:
             logger.exception("PDF selectable-text extraction failed; will try OCR")
             selectable = ""
-            logger.info(
-                "PDF selectable text unavailable: %s", _format_exception(exc)
+            print(
+                f"PDF selectable text unavailable: {_format_exception(exc)}",
+                flush=True,
             )
 
+        print(
+            f"PDF selectable text chars={len(selectable)} threshold={SELECTABLE_TEXT_THRESHOLD}",
+            flush=True,
+        )
         logger.info(
             "PDF selectable text chars=%s threshold=%s",
             len(selectable),
@@ -468,12 +484,11 @@ def get_resume_text(file_path: str) -> tuple[str, bool]:
             logger.info("Using selectable PDF text (OCR not required)")
             return selectable, False
 
-        # Image-only / scanned PDF: always enter OCR. Do not return empty-text.
-        logger.info("Selectable PDF text insufficient; invoking OCR")
+        print("Selectable PDF text insufficient; invoking OCR", flush=True)
         return _run_ocr(str(path), extension), True
 
     if extension in IMAGE_EXTENSIONS:
-        logger.info("Image upload detected; invoking OCR for %s", extension)
+        print(f"Image upload detected; invoking OCR for {extension}", flush=True)
         return _run_ocr(str(path), extension), True
 
     raise ResumeParseError(

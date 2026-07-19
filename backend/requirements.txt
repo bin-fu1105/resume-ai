@@ -5,8 +5,8 @@ PyMuPDF
 python-docx
 anthropic
 python-dotenv
-numpy
 Pillow
-opencv-python-headless
-onnxruntime
-paddleocr>=3.7.0
+# Vercel serverless limit is 500MB. PaddleOCR pushes the bundle over that limit
+# (~630MB), so production uses RapidOCR (ONNX). Install PaddleOCR locally via
+# requirements-ocr-paddle.txt when you want the preferred engine on a fat host.
+rapidocr-onnxruntime

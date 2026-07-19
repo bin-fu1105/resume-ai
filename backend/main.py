@@ -15,6 +15,7 @@ from services.claude_service import ClaudeService, ClaudeServiceError
 from services.compare_service import compare_resumes
 from services.interview_service import InterviewService
 from services.job_compare_service import JobCompareService
+from services import ocr_service
 from services.ocr_service import (
     OCR_SUCCESS_MESSAGE,
     get_resume_text,
@@ -240,6 +241,7 @@ async def upload_resume(file: UploadFile = File(...)):
         "status": "success",
         "ocr_used": used_ocr,
         "ocr_attempted": used_ocr,
+        "ocr_backend": ocr_service._ocr_backend,
         "commit": os.getenv("VERCEL_GIT_COMMIT_SHA", "local")[:12],
     }
     if used_ocr:
