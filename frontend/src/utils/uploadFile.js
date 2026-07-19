@@ -1,4 +1,8 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Production: same-origin relative paths (Vercel rewrites /upload etc. to backend).
+// Local dev: talk to FastAPI on :8000 unless VITE_API_URL overrides.
+const API_BASE =
+  import.meta.env.VITE_API_URL ??
+  (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
 const ALLOWED_EXTENSIONS = [".pdf", ".docx"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
