@@ -20,6 +20,11 @@ from services.ocr_service import (
     get_resume_text,
     probe_ocr_runtime,
 )
+from services.parse_service import (
+    normalize_structured_resume,
+    structure_resume_text,
+    structured_to_plain_text,
+)
 from services.resume_parser import ResumeParseError
 from services.rewrite_service import RewriteService
 
@@ -60,12 +65,19 @@ job_compare_service = JobCompareService(claude_service)
 class AnalyzeRequest(BaseModel):
     filename: str
     job_description: str = Field(default="")
+    # When true, analyze the applied/optimized resume text from cache.
+    use_applied: bool = False
 
 
 class RewriteRequest(BaseModel):
     filename: str
     job_description: str = Field(default="")
     section: str = Field(default="")
+
+
+class ApplyRewriteRequest(BaseModel):
+    filename: str
+    rewrite: dict = Field(default_factory=dict)
 
 
 class ChatMessage(BaseModel):
@@ -249,6 +261,17 @@ async def analyze_resume(payload: AnalyzeRequest):
     """Analyze an uploaded resume with Claude using extracted text + JD."""
     safe_name, resume_text = _resolve_resume_text(payload.filename)
 
+    # Optional: analyze applied optimized text stored under a derived cache key.
+    if payload.use_applied:
+        applied_key = f"{safe_name}__applied"
+        applied_text = _RESUME_TEXT_CACHE.get(applied_key)
+        if not applied_text:
+            raise HTTPException(
+                status_code=404,
+                detail="Applied rewrite not found. Apply a rewrite first.",
+            )
+        resume_text = applied_text
+
     try:
         analysis = claude_service.analyze_resume(
             resume_text=resume_text,
@@ -260,30 +283,67 @@ async def analyze_resume(payload: AnalyzeRequest):
     return {
         "filename": safe_name,
         "analysis": analysis,
+        "source": "applied" if payload.use_applied else "original",
     }
 
 
 @app.post("/rewrite")
 async def rewrite_resume(payload: RewriteRequest):
-    """Rewrite an uploaded resume with Claude for the target job description."""
+    """Optimize resume sections independently for the target job description."""
     if not payload.job_description.strip():
         raise HTTPException(
             status_code=400,
             detail="Job description is required for rewrite.",
         )
 
-    _, resume_text = _resolve_resume_text(payload.filename)
+    safe_name, resume_text = _resolve_resume_text(payload.filename)
 
     try:
         rewrite = rewrite_service.rewrite_resume(
             resume_text=resume_text,
             job_description=payload.job_description,
             focus_section=payload.section or None,
+            independent=True,
         )
     except ClaudeServiceError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    return rewrite
+    original = rewrite.pop("original", None) or structure_resume_text(resume_text)
+    insights = rewrite.pop("section_insights", [])
+    normalized = normalize_structured_resume(rewrite)
+
+    # Preserve flat keys for existing clients, plus optimization metadata.
+    return {
+        **normalized,
+        "rewrite": normalized,
+        "original": original,
+        "section_insights": insights,
+        "filename": safe_name,
+    }
+
+
+@app.post("/apply-rewrite")
+async def apply_rewrite(payload: ApplyRewriteRequest):
+    """Apply optimized structured resume as the editable working resume text."""
+    safe_name, _ = _resolve_resume_text(payload.filename)
+    if not payload.rewrite:
+        raise HTTPException(status_code=400, detail="Rewrite payload is required.")
+
+    structured = normalize_structured_resume(payload.rewrite)
+    plain = structured_to_plain_text(structured)
+    if not plain.strip():
+        raise HTTPException(status_code=400, detail="Rewrite content is empty.")
+
+    # Keep the uploaded original at `safe_name` so Compare still has a true baseline.
+    # Analyze Again reads the applied working copy from the derived key.
+    _RESUME_TEXT_CACHE[f"{safe_name}__applied"] = plain
+
+    return {
+        "filename": safe_name,
+        "status": "applied",
+        "structured": structured,
+        "text_length": len(plain),
+    }
 
 
 @app.post("/chat")

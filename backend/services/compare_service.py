@@ -3,169 +3,12 @@
 from __future__ import annotations
 
 import difflib
-import re
 from typing import Any
 
-
-SECTION_ALIASES = {
-    "summary": {
-        "summary",
-        "professional summary",
-        "profile",
-        "about",
-        "objective",
-        "about me",
-    },
-    "experience": {
-        "experience",
-        "work experience",
-        "professional experience",
-        "employment",
-        "work history",
-        "employment history",
-    },
-    "projects": {
-        "projects",
-        "project",
-        "personal projects",
-        "selected projects",
-        "project experience",
-        "key projects",
-    },
-    "skills": {
-        "skills",
-        "technical skills",
-        "core skills",
-        "technologies",
-        "tech stack",
-        "tools",
-        "skills & tools",
-        "skills and tools",
-    },
-}
-
-HEADING_RE = re.compile(
-    r"^(?P<title>[A-Za-z][A-Za-z0-9 &/+\-]{1,40})\s*:?\s*$"
+from services.parse_service import (
+    normalize_structured_resume,
+    structure_resume_text,
 )
-
-
-def _normalize_heading(line: str) -> str:
-    return re.sub(r"\s+", " ", line.strip().lower().rstrip(":"))
-
-
-def _match_section(line: str) -> str | None:
-    heading = _normalize_heading(line)
-    if not HEADING_RE.match(line.strip()) and ":" not in line and len(heading.split()) > 4:
-        return None
-
-    for section, aliases in SECTION_ALIASES.items():
-        if heading in aliases:
-            return section
-    return None
-
-
-def _split_skill_line(line: str) -> list[str]:
-    parts = re.split(r"[,•·|;/]| {2,}", line)
-    return [part.strip(" -•\t") for part in parts if part.strip(" -•\t")]
-
-
-def structure_resume_text(resume_text: str) -> dict[str, Any]:
-    """Heuristically split raw resume text into compare sections."""
-    lines = [line.strip() for line in (resume_text or "").splitlines()]
-    lines = [line for line in lines if line]
-
-    structured = {
-        "summary": "",
-        "experience": [],
-        "projects": [],
-        "skills": [],
-    }
-
-    current = None
-    buffer: list[str] = []
-
-    def flush() -> None:
-        nonlocal buffer, current
-        if not current or not buffer:
-            buffer = []
-            return
-
-        if current == "summary":
-            text = " ".join(buffer).strip()
-            if text:
-                structured["summary"] = text
-        elif current == "skills":
-            skills: list[str] = []
-            for item in buffer:
-                skills.extend(_split_skill_line(item))
-            # de-dupe preserving order
-            seen = set()
-            structured["skills"] = [
-                skill
-                for skill in skills
-                if not (skill.lower() in seen or seen.add(skill.lower()))
-            ]
-        else:
-            structured[current] = [
-                item.lstrip("•-* ").strip()
-                for item in buffer
-                if item.lstrip("•-* ").strip()
-            ]
-        buffer = []
-
-    preamble: list[str] = []
-
-    for line in lines:
-        section = _match_section(line)
-        if section:
-            flush()
-            current = section
-            continue
-
-        if current is None:
-            preamble.append(line)
-        else:
-            buffer.append(line)
-
-    flush()
-
-    # If no explicit summary heading, use early preamble lines as summary.
-    if not structured["summary"] and preamble:
-        # Skip likely name/title first line when multiple preamble lines exist.
-        summary_lines = preamble[1:] if len(preamble) > 2 else preamble
-        structured["summary"] = " ".join(summary_lines).strip()
-
-    # If experience never found, keep remaining non-header bullets as experience.
-    if not structured["experience"] and not any(
-        structured[key] for key in ("projects", "skills")
-    ):
-        leftover = [
-            line.lstrip("•-* ").strip()
-            for line in lines
-            if line.lstrip("•-* ").strip() and not _match_section(line)
-        ]
-        structured["experience"] = leftover[2:] if len(leftover) > 3 else leftover
-
-    return structured
-
-
-def _normalize_rewrite(rewrite: dict[str, Any] | None) -> dict[str, Any]:
-    payload = rewrite or {}
-    summary = str(
-        payload.get("summary") or payload.get("professional_summary") or ""
-    ).strip()
-
-    def as_list(value: Any) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    return {
-        "summary": summary,
-        "experience": as_list(payload.get("experience")),
-        "projects": as_list(payload.get("projects")),
-        "skills": as_list(payload.get("skills")),
-    }
 
 
 def _word_diff(original: str, optimized: str) -> dict[str, list[dict[str, str]]]:
@@ -292,13 +135,14 @@ def compare_resumes(
     rewrite: dict[str, Any] | None,
 ) -> dict[str, Any]:
     original = structure_resume_text(resume_text)
-    optimized = _normalize_rewrite(rewrite)
+    optimized = normalize_structured_resume(rewrite)
 
     section_specs = [
         ("summary", "Summary", "text"),
         ("experience", "Experience", "list"),
         ("projects", "Projects", "list"),
         ("skills", "Skills", "list"),
+        ("education", "Education", "list"),
     ]
 
     sections = []

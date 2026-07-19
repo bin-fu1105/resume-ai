@@ -57,4 +57,9 @@ export const SECTION_META = [
     title: "Skills",
     description: "Keyword coverage and stack match for the job.",
   },
+  {
+    id: "education",
+    title: "Education",
+    description: "Degree, coursework, and credential relevance.",
+  },
 ];

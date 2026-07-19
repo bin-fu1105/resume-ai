@@ -1,42 +1,38 @@
 <<<SHARED_RULES>>>
 
-Rewrite the candidate resume for the target job description and return ONLY valid JSON matching this exact schema:
+Rewrite the candidate resume for the target job description.
+Rewrite EACH section independently (Summary, Experience, Projects, Skills, Education).
+Return ONLY valid JSON matching this exact schema:
 
 {
   "summary": "...",
-  "experience": [
-    "...",
-    "...",
-    "..."
-  ],
-  "projects": [
-    "...",
-    "..."
-  ],
-  "skills": [
-    "...",
-    "...",
-    "..."
+  "experience": ["...", "..."],
+  "projects": ["...", "..."],
+  "skills": ["...", "..."],
+  "education": ["...", "..."],
+  "section_insights": [
+    {
+      "id": "summary",
+      "improvement_badge": "High impact|Improved|Minor polish|Unchanged",
+      "estimated_ats_gain": 0,
+      "rationale": "one short sentence"
+    }
   ]
 }
 
 Rewrite requirements:
-1. Rewrite the Professional Summary, Experience bullets, Project descriptions, and Skills section.
-2. Keep all facts truthful.
-3. Never fabricate companies, employers, job titles, technologies, years, dates, metrics, degrees, or responsibilities.
-4. Rewrite Experience and Projects using STAR format whenever possible:
-   - Situation/Task compressed into context
-   - Action with strong verbs
-   - Result with measurable impact when supported by the resume
-5. Improve weak verbs (e.g. "helped", "worked on") into stronger action verbs only when truthful.
-6. Increase ATS keyword coverage by prioritizing job-description terms that already appear or are clearly supported in the resume.
-7. summary must be a polished 3-5 sentence professional summary tailored to the job.
-8. experience must be an array of rewritten STAR-style accomplishment bullets.
-9. projects must be an array of rewritten STAR-style project descriptions.
-10. skills must be an array of concise skill keywords relevant to the job and supported by the resume.
-11. If a section has no supporting content in the resume, return an empty array for that section.
-12. Prefer quantified impact only when the source resume supports the number or outcome.
-13. Focus instruction:
+1. Improve ATS keyword matching using terms supported by the resume and relevant to the job.
+2. Preserve factual accuracy. Never invent experience, employers, titles, technologies, dates, metrics, degrees, or responsibilities.
+3. Use stronger action verbs when truthful.
+4. Add measurable achievements only when already supported by the resume.
+5. Follow STAR style for Experience and Projects bullets where appropriate.
+6. summary must be a polished 3-5 sentence professional summary tailored to the job.
+7. experience/projects/education must be arrays of rewritten lines/bullets.
+8. skills must be an array of concise skill keywords relevant to the job and supported by the resume.
+9. If a section has no supporting content, return empty string/array for that section.
+10. section_insights MUST include exactly these ids: summary, experience, projects, skills, education.
+11. estimated_ats_gain must be an integer from 0 to 20 for each section.
+12. Focus instruction:
 <<<FOCUS_INSTRUCTION>>>
 
 Job Description:

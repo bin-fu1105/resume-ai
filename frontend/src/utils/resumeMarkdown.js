@@ -34,6 +34,14 @@ export function rewrittenResumeToMarkdown(rewrite) {
     lines.push("## Skills", "", rewrite.skills.join(", "), "");
   }
 
+  if (rewrite.education?.length) {
+    lines.push("## Education", "");
+    rewrite.education.forEach((item) => {
+      lines.push(`- ${item}`);
+    });
+    lines.push("");
+  }
+
   return `${lines.join("\n").trim()}\n`;
 }
 
@@ -63,6 +71,12 @@ export function rewrittenResumeToPlainText(rewrite) {
 
   if (rewrite.skills?.length) {
     sections.push(`Skills\n${rewrite.skills.join(", ")}`);
+  }
+
+  if (rewrite.education?.length) {
+    sections.push(
+      `Education\n${rewrite.education.map((item) => `• ${item}`).join("\n")}`
+    );
   }
 
   return sections.join("\n\n");

@@ -26,7 +26,13 @@ import {
 } from "./utils/uploadFile";
 
 const ResultsSection = lazy(() => import("./components/ResultsSection"));
-const SECTION_KEYS = ["summary", "experience", "projects", "skills"];
+const SECTION_KEYS = [
+  "summary",
+  "experience",
+  "projects",
+  "skills",
+  "education",
+];
 
 function ResultsFallback() {
   return (
@@ -77,8 +83,14 @@ function App() {
   const [optimizedSummary, setOptimizedSummary] = useState("");
   const [analysisPayload, setAnalysisPayload] = useState(null);
   const [rewrittenResume, setRewrittenResume] = useState(null);
+  const [sectionInsights, setSectionInsights] = useState([]);
   const [rewriteError, setRewriteError] = useState("");
   const [rewriteSection, setRewriteSection] = useState(null);
+  const [rewriteApplied, setRewriteApplied] = useState(false);
+  const [applyingRewrite, setApplyingRewrite] = useState(false);
+  const [analyzingAgain, setAnalyzingAgain] = useState(false);
+  const [baselineAtsScore, setBaselineAtsScore] = useState(null);
+  const [afterAtsScore, setAfterAtsScore] = useState(null);
   const [activeTab, setActiveTab] = useState("dashboard");
 
   const [error, setError] = useState("");
@@ -109,7 +121,7 @@ function App() {
     });
   };
 
-  const resetAnalysisState = () => {
+  const resetAnalysisState = ({ keepOptimization = false } = {}) => {
     setScore(null);
     setAtsExplanation("");
     setDimensions({});
@@ -118,10 +130,17 @@ function App() {
     setSuggestions([]);
     setOptimizedSummary("");
     setAnalysisPayload(null);
-    setRewrittenResume(null);
-    setRewriteError("");
-    setRewriteSection(null);
     setShowResults(false);
+    setAfterAtsScore(null);
+
+    if (!keepOptimization) {
+      setRewrittenResume(null);
+      setSectionInsights([]);
+      setRewriteError("");
+      setRewriteSection(null);
+      setRewriteApplied(false);
+      setBaselineAtsScore(null);
+    }
   };
 
   const handleJobDescriptionChange = (e) => {
@@ -230,12 +249,15 @@ function App() {
       setSuggestions(analysis.suggestions || []);
       setOptimizedSummary(analysis.optimized_summary || "");
       setAnalysisPayload(analysis);
+      setBaselineAtsScore(analysis.ats_score ?? null);
+      setAfterAtsScore(null);
+      setRewriteApplied(false);
 
       setTimeout(() => {
         setLoading(false);
         setShowResults(true);
         setActiveTab("heatmap");
-        showToast("Analysis complete. Open Heatmap for section scores.", "success");
+        showToast("Analysis complete. Optimize to improve each section.", "success");
         requestAnimationFrame(() => {
           resultsRef.current?.scrollIntoView({
             behavior: "smooth",
@@ -249,6 +271,86 @@ function App() {
       setError(message);
       showToast(message, "error");
       setLoading(false);
+    }
+  };
+
+  const handleAnalyzeAgain = async () => {
+    if (!uploadResult?.filename || !rewriteApplied) {
+      showToast("Apply a rewrite before analyzing again.", "error");
+      return;
+    }
+    if (!jobDescription.trim()) {
+      showToast("Please enter a job description.", "error");
+      return;
+    }
+
+    setAnalyzingAgain(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: uploadResult.filename,
+          job_description: jobDescription,
+          use_applied: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || "Analyze again failed.");
+      }
+
+      const analysis = data.analysis || {};
+      setAfterAtsScore(analysis.ats_score ?? null);
+      setScore(analysis.ats_score ?? null);
+      setAtsExplanation(analysis.ats_explanation || "");
+      setDimensions(analysis.resume_match || {});
+      setStrengths(analysis.strengths || []);
+      setMissingSkills(analysis.missing_skills || []);
+      setSuggestions(analysis.suggestions || []);
+      setOptimizedSummary(analysis.optimized_summary || "");
+      setAnalysisPayload(analysis);
+      setShowResults(true);
+      showToast("Optimized resume analyzed. Compare Before vs After ATS.", "success");
+    } catch (err) {
+      const message = toFriendlyAnalyzeError(err);
+      setError(message);
+      showToast(message, "error");
+    } finally {
+      setAnalyzingAgain(false);
+    }
+  };
+
+  const handleApplyRewrite = async () => {
+    if (!uploadResult?.filename || !rewrittenResume) {
+      showToast("Generate an optimized rewrite first.", "error");
+      return;
+    }
+
+    setApplyingRewrite(true);
+    try {
+      const response = await fetch(`${API_BASE}/apply-rewrite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: uploadResult.filename,
+          rewrite: rewrittenResume,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || data.error || "Apply rewrite failed.");
+      }
+
+      setRewriteApplied(true);
+      setAfterAtsScore(null);
+      showToast("Rewrite applied to your working resume.", "success");
+    } catch (err) {
+      showToast(toFriendlyRewriteError(err), "error");
+    } finally {
+      setApplyingRewrite(false);
     }
   };
 
@@ -329,20 +431,24 @@ function App() {
             experience: data.experience || [],
             projects: data.projects || [],
             skills: data.skills || [],
+            education: data.education || [],
           };
 
       const nextRewrite = mergeSectionRewrite(rewritePayload, focusSection);
       setRewrittenResume(nextRewrite);
+      setSectionInsights(data.section_insights || []);
+      setRewriteApplied(false);
+      setAfterAtsScore(null);
       setShowResults(true);
 
       if (focusSection) {
         showToast(
-          `${focusSection.charAt(0).toUpperCase()}${focusSection.slice(1)} section rewritten.`,
+          `${focusSection.charAt(0).toUpperCase()}${focusSection.slice(1)} section optimized.`,
           "success",
         );
       } else {
-        setActiveTab("compare");
-        showToast("Resume rewritten successfully.", "success");
+        setActiveTab("optimize");
+        showToast("Resume optimized. Review Original vs Optimized.", "success");
       }
     } catch (err) {
       const message = toFriendlyRewriteError(err);
@@ -368,9 +474,9 @@ function App() {
   const statusMessage = loading
     ? "AI analysis in progress..."
     : rewriting
-      ? "Rewriting resume with Claude..."
+      ? "Optimizing resume sections with Claude..."
       : canRewrite
-        ? "Analysis ready. Rewrite to generate an optimized resume."
+        ? "Analysis ready. Optimize each section, then apply the rewrite."
         : canAnalyze
           ? "Resume uploaded. Add a job description, then analyze."
           : "Upload a resume successfully to enable analysis.";
@@ -398,8 +504,8 @@ function App() {
                 Resume Optimization
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
-                Upload, analyze, rewrite, then compare original vs optimized
-                side-by-side.
+                Upload, analyze, optimize each section, apply the rewrite, then
+                compare Before vs After ATS.
               </p>
             </div>
 
@@ -437,15 +543,15 @@ function App() {
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeTab === "compare"}
-                onClick={() => setActiveTab("compare")}
+                aria-selected={activeTab === "optimize"}
+                onClick={() => setActiveTab("optimize")}
                 className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
-                  activeTab === "compare"
+                  activeTab === "optimize"
                     ? "bg-accent text-white"
                     : "text-muted hover:text-ink"
                 }`}
               >
-                Compare
+                Optimize
               </button>
               <button
                 type="button"
@@ -477,11 +583,22 @@ function App() {
           </div>
         </section>
 
-        {activeTab === "compare" ? (
+        {activeTab === "optimize" ? (
           <CompareView
             filename={uploadResult?.filename || ""}
             rewrite={rewrittenResume}
+            sectionInsights={sectionInsights}
             enabled={Boolean(uploadResult?.filename && rewrittenResume)}
+            canOptimize={canRewrite}
+            optimizing={rewriting && !rewriteSection}
+            baselineAtsScore={baselineAtsScore}
+            afterAtsScore={afterAtsScore}
+            rewriteApplied={rewriteApplied}
+            applying={applyingRewrite}
+            analyzingAgain={analyzingAgain}
+            onOptimize={() => handleRewrite()}
+            onApplyRewrite={handleApplyRewrite}
+            onAnalyzeAgain={handleAnalyzeAgain}
           />
         ) : activeTab === "heatmap" ? (
           <HeatmapView

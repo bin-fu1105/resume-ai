@@ -29,6 +29,10 @@
       "destination": { "service": "backend" }
     },
     {
+      "source": "/apply-rewrite",
+      "destination": { "service": "backend" }
+    },
+    {
       "source": "/chat",
       "destination": { "service": "backend" }
     },

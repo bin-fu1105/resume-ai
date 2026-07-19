@@ -1,0 +1,41 @@
+<<<SHARED_RULES>>>
+
+Rewrite ONE resume section for the target job description.
+Treat this section independently from other sections.
+Return ONLY valid JSON matching this exact schema:
+
+{
+  "section": "summary|experience|projects|skills|education",
+  "content": "string for summary OR array of strings for other sections",
+  "improvement_badge": "High impact|Improved|Minor polish|Unchanged",
+  "estimated_ats_gain": 0,
+  "rationale": "one short sentence"
+}
+
+Rewrite requirements for this section:
+1. Improve ATS keyword matching using terms supported by the resume and relevant to the job.
+2. Preserve factual accuracy. Never invent experience, employers, titles, technologies, dates, metrics, degrees, or responsibilities.
+3. Use stronger action verbs when truthful.
+4. Add measurable achievements only when already supported by the resume.
+5. Follow STAR style for experience/project bullets where appropriate.
+6. estimated_ats_gain must be an integer from 0 to 20 estimating likely ATS lift for THIS section only.
+7. improvement_badge guidance:
+   - High impact: major keyword/clarity gains
+   - Improved: clear quality gains
+   - Minor polish: light wording improvements
+   - Unchanged: little or no meaningful change
+8. If the source section is empty, return empty content ("" or []) with badge "Unchanged" and estimated_ats_gain 0.
+9. Focus instruction:
+<<<FOCUS_INSTRUCTION>>>
+
+Section to rewrite:
+<<<SECTION_NAME>>>
+
+Original section content:
+<<<SECTION_CONTENT>>>
+
+Full resume context (for factual grounding only):
+<<<RESUME_TEXT>>>
+
+Job Description:
+<<<JOB_DESCRIPTION>>>

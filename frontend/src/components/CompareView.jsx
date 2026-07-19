@@ -12,9 +12,23 @@ const TOKEN_STYLES = {
   changed: "bg-amber-100 text-amber-950",
 };
 
+const BADGE_STYLES = {
+  "High impact": "bg-emerald-100 text-emerald-800",
+  Improved: "bg-sky-100 text-sky-800",
+  "Minor polish": "bg-amber-100 text-amber-900",
+  Unchanged: "bg-slate-100 text-slate-700",
+};
+
 function matchesSearch(text, query) {
   if (!query) return true;
   return String(text || "").toLowerCase().includes(query.toLowerCase());
+}
+
+function tokensToPlainText(tokens = []) {
+  return tokens
+    .map((token) => token.text)
+    .filter(Boolean)
+    .join("\n");
 }
 
 function DiffToken({ type, text }) {
@@ -28,14 +42,41 @@ function DiffToken({ type, text }) {
   );
 }
 
-function SideBySideColumn({ title, tokens, query }) {
+function CopyButton({ text, label = "Copy" }) {
+  const [copyLabel, setCopyLabel] = useState(label);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text || "");
+      setCopyLabel("Copied");
+    } catch {
+      setCopyLabel("Failed");
+    }
+    setTimeout(() => setCopyLabel(label), 1400);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="rounded-lg border border-line bg-white px-2.5 py-1 text-[11px] font-semibold text-muted transition hover:border-accent hover:text-accent"
+    >
+      {copyLabel}
+    </button>
+  );
+}
+
+function SideBySideColumn({ title, tokens, query, onCopy }) {
   const visible = tokens.filter((token) => matchesSearch(token.text, query));
 
   return (
     <div className="min-w-0 rounded-xl border border-line bg-canvas/40 p-3 sm:p-4">
-      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-        {title}
-      </p>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+          {title}
+        </p>
+        <CopyButton text={tokensToPlainText(tokens)} />
+      </div>
       {visible.length === 0 ? (
         <p className="text-sm text-muted">No matching content.</p>
       ) : (
@@ -114,7 +155,79 @@ function UnifiedRows({ rows, query, hideUnchanged }) {
   );
 }
 
-function CompareSection({ section, mode, hideUnchanged, query, open, onToggle }) {
+function AtsDeltaCard({ beforeScore, afterScore, applied }) {
+  if (beforeScore == null) {
+    return null;
+  }
+
+  const after = afterScore == null ? null : Number(afterScore);
+  const before = Number(beforeScore);
+  const delta = after == null ? null : after - before;
+
+  return (
+    <div className="panel-card">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
+        ATS Impact
+      </p>
+      <h3 className="mt-1 font-display text-lg font-semibold text-ink">
+        Before vs After
+      </h3>
+      <div className="mt-4 grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-line bg-canvas/50 px-3 py-3 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Before
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold text-ink">
+            {before}
+          </p>
+        </div>
+        <div className="rounded-xl border border-line bg-canvas/50 px-3 py-3 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            After
+          </p>
+          <p className="mt-1 font-display text-2xl font-semibold text-ink">
+            {after == null ? "—" : after}
+          </p>
+        </div>
+        <div className="rounded-xl border border-line bg-canvas/50 px-3 py-3 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+            Delta
+          </p>
+          <p
+            className={`mt-1 font-display text-2xl font-semibold ${
+              delta == null
+                ? "text-muted"
+                : delta > 0
+                  ? "text-emerald-700"
+                  : delta < 0
+                    ? "text-rose-700"
+                    : "text-ink"
+            }`}
+          >
+            {delta == null ? "—" : `${delta > 0 ? "+" : ""}${delta}`}
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 text-sm text-muted">
+        {applied
+          ? after == null
+            ? "Rewrite applied. Run Analyze Again to score the optimized resume."
+            : "Scores compare your original analysis with the optimized resume."
+          : "Apply the rewrite, then Analyze Again to unlock the after score."}
+      </p>
+    </div>
+  );
+}
+
+function CompareSection({
+  section,
+  insight,
+  mode,
+  hideUnchanged,
+  query,
+  open,
+  onToggle,
+}) {
   const filteredOriginal = useMemo(() => {
     const tokens = section.side_by_side?.original || [];
     return tokens.filter((token) => {
@@ -148,6 +261,9 @@ function CompareSection({ section, mode, hideUnchanged, query, open, onToggle })
     return null;
   }
 
+  const badge = insight?.improvement_badge || (section.has_changes ? "Improved" : "Unchanged");
+  const gain = Number(insight?.estimated_ats_gain ?? 0);
+
   return (
     <section className="overflow-hidden rounded-2xl border border-line bg-surface shadow-sm">
       <button
@@ -157,11 +273,22 @@ function CompareSection({ section, mode, hideUnchanged, query, open, onToggle })
         aria-expanded={open}
       >
         <div className="min-w-0">
-          <h3 className="font-display text-sm font-semibold text-ink">
-            {section.title}
-          </h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-display text-sm font-semibold text-ink">
+              {section.title}
+            </h3>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${BADGE_STYLES[badge] || BADGE_STYLES.Improved}`}
+            >
+              {badge}
+            </span>
+            <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent">
+              Est. ATS +{gain}
+            </span>
+          </div>
           <p className="mt-0.5 text-xs text-muted">
-            {section.has_changes ? "Changes detected" : "No changes"}
+            {insight?.rationale ||
+              (section.has_changes ? "Changes detected" : "No changes")}
           </p>
         </div>
         <svg
@@ -183,12 +310,12 @@ function CompareSection({ section, mode, hideUnchanged, query, open, onToggle })
           {mode === "side-by-side" ? (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <SideBySideColumn
-                title="Original Resume"
+                title="Original"
                 tokens={filteredOriginal}
                 query=""
               />
               <SideBySideColumn
-                title="Optimized Resume"
+                title="Optimized"
                 tokens={filteredOptimized}
                 query=""
               />
@@ -206,7 +333,22 @@ function CompareSection({ section, mode, hideUnchanged, query, open, onToggle })
   );
 }
 
-function CompareView({ filename, rewrite, enabled }) {
+function CompareView({
+  filename,
+  rewrite,
+  sectionInsights = [],
+  enabled,
+  canOptimize = false,
+  optimizing = false,
+  baselineAtsScore = null,
+  afterAtsScore = null,
+  rewriteApplied = false,
+  applying = false,
+  analyzingAgain = false,
+  onOptimize,
+  onApplyRewrite,
+  onAnalyzeAgain,
+}) {
   const [compareData, setCompareData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -214,6 +356,23 @@ function CompareView({ filename, rewrite, enabled }) {
   const [hideUnchanged, setHideUnchanged] = useState(false);
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState({});
+
+  const insightMap = useMemo(() => {
+    const map = {};
+    (sectionInsights || []).forEach((item) => {
+      if (item?.id) map[item.id] = item;
+    });
+    return map;
+  }, [sectionInsights]);
+
+  const estimatedTotalGain = useMemo(
+    () =>
+      (sectionInsights || []).reduce(
+        (sum, item) => sum + (Number(item?.estimated_ats_gain) || 0),
+        0
+      ),
+    [sectionInsights]
+  );
 
   const loadCompare = async () => {
     if (!filename || !rewrite) {
@@ -295,138 +454,182 @@ function CompareView({ filename, rewrite, enabled }) {
 
   if (!enabled) {
     return (
-      <section id="compare" className="panel-card scroll-mt-24">
+      <section id="optimize" className="panel-card scroll-mt-24 space-y-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
+            Optimize
+          </p>
+          <h2 className="mt-1 font-display text-xl font-semibold tracking-tight text-ink">
+            Original vs Optimized
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm text-muted">
+            Analyze your resume first, then generate an optimized rewrite. This
+            page will show side-by-side sections, Apply Rewrite, and Analyze Again.
+          </p>
+        </div>
+
         <EmptyState
           icon="rewrite"
-          description="Run Rewrite Resume first to compare original vs optimized versions."
+          description={
+            canOptimize
+              ? "Ready to optimize. Generate the rewrite to unlock Original vs Optimized."
+              : "Analyze your resume on the Workspace tab, then return here or click Optimize Resume."
+          }
         />
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={onOptimize}
+            disabled={!canOptimize || optimizing}
+            className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {optimizing ? "Optimizing..." : "Optimize Resume"}
+          </button>
+        </div>
       </section>
     );
   }
 
   return (
-    <section id="compare" className="space-y-4 scroll-mt-24" aria-label="Rewrite compare">
+    <section id="optimize" className="space-y-4 scroll-mt-24" aria-label="Resume optimize compare">
       <div className="panel-card">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">
-              Compare
+              Optimize
             </p>
             <h2 className="mt-1 font-display text-xl font-semibold tracking-tight text-ink">
               Original vs Optimized
             </h2>
             <p className="mt-1 text-sm text-muted">
-              Highlighted diffs from your parsed resume and the latest rewrite.
+              Section-by-section rewrites with estimated ATS gain. Apply to replace
+              your working resume, then analyze again.
             </p>
+            {estimatedTotalGain > 0 && (
+              <p className="mt-2 text-sm font-semibold text-accent">
+                Combined estimated ATS gain: +{estimatedTotalGain}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-xl border border-line bg-canvas/50 p-1">
-              <button
-                type="button"
-                onClick={() => setMode("side-by-side")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  mode === "side-by-side"
-                    ? "bg-white text-accent shadow-sm"
-                    : "text-muted hover:text-ink"
-                }`}
-              >
-                Side-by-side
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("unified")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  mode === "unified"
-                    ? "bg-white text-accent shadow-sm"
-                    : "text-muted hover:text-ink"
-                }`}
-              >
-                Unified diff
-              </button>
-            </div>
-
             <button
               type="button"
-              onClick={() => setHideUnchanged((value) => !value)}
-              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:border-accent hover:text-accent"
+              onClick={onApplyRewrite}
+              disabled={applying || rewriteApplied}
+              className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {hideUnchanged ? "Show all" : "Hide unchanged"}
+              {applying ? "Applying..." : rewriteApplied ? "Rewrite Applied" : "Apply Rewrite"}
             </button>
             <button
               type="button"
-              onClick={expandAll}
-              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:border-accent hover:text-accent"
+              onClick={onAnalyzeAgain}
+              disabled={!rewriteApplied || analyzingAgain}
+              className="rounded-xl border border-line bg-white px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Expand
+              {analyzingAgain ? "Analyzing..." : "Analyze Again"}
             </button>
-            <button
-              type="button"
-              onClick={collapseAll}
-              className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink transition hover:border-accent hover:text-accent"
-            >
-              Collapse
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <label htmlFor="compare-search" className="sr-only">
-            Search inside compare
-          </label>
-          <input
-            id="compare-search"
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search inside compare..."
-            className="w-full max-w-md rounded-xl border border-line bg-canvas/50 px-3 py-2 text-sm text-ink outline-none transition placeholder:text-muted/70 focus:border-accent focus:bg-white focus:ring-2 focus:ring-accent/20"
-          />
-          <div className="flex flex-wrap gap-2 text-[11px] text-muted">
-            <span className="rounded bg-emerald-100 px-2 py-1 text-emerald-900">
-              Added
-            </span>
-            <span className="rounded bg-red-100 px-2 py-1 text-red-900">
-              Removed
-            </span>
-            <span className="rounded bg-amber-100 px-2 py-1 text-amber-950">
-              Changed
-            </span>
           </div>
         </div>
       </div>
 
-      {loading && (
-        <div className="panel-card flex items-center gap-3 text-sm text-muted">
-          <Spinner label="Building compare view" />
-          Building compare view...
-        </div>
-      )}
+      <AtsDeltaCard
+        beforeScore={baselineAtsScore}
+        afterScore={afterAtsScore}
+        applied={rewriteApplied}
+      />
 
-      {error && (
-        <ErrorState
-          title="Compare failed"
-          message={error}
-          onRetry={loadCompare}
-          retryLabel="Retry compare"
-        />
-      )}
+      <div className="panel-card space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-xl border border-line bg-canvas/50 p-1">
+            <button
+              type="button"
+              onClick={() => setMode("side-by-side")}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                mode === "side-by-side"
+                  ? "bg-white text-accent shadow-sm"
+                  : "text-muted hover:text-ink"
+              }`}
+            >
+              Side-by-side
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("unified")}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                mode === "unified"
+                  ? "bg-white text-accent shadow-sm"
+                  : "text-muted hover:text-ink"
+              }`}
+            >
+              Unified diff
+            </button>
+          </div>
 
-      {!loading && !error && compareData && (
-        <div className="space-y-3">
-          {(compareData.sections || []).map((section) => (
-            <CompareSection
-              key={section.id}
-              section={section}
-              mode={mode}
-              hideUnchanged={hideUnchanged}
-              query={query}
-              open={Boolean(openSections[section.id])}
-              onToggle={() => toggleSection(section.id)}
-            />
-          ))}
+          <button
+            type="button"
+            onClick={() => setHideUnchanged((value) => !value)}
+            className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+          >
+            {hideUnchanged ? "Show unchanged" : "Hide unchanged"}
+          </button>
+          <button
+            type="button"
+            onClick={expandAll}
+            className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+          >
+            Expand all
+          </button>
+          <button
+            type="button"
+            onClick={collapseAll}
+            className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted transition hover:text-ink"
+          >
+            Collapse all
+          </button>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search changes..."
+            className="min-w-[180px] flex-1 rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
+          />
         </div>
-      )}
+
+        {loading && (
+          <div className="flex items-center gap-3 py-8 text-sm text-muted">
+            <Spinner label="Building compare view" />
+            Building optimized comparison...
+          </div>
+        )}
+
+        {error && (
+          <ErrorState
+            title="Compare failed"
+            message={error}
+            onRetry={loadCompare}
+            retryLabel="Retry compare"
+          />
+        )}
+
+        {!loading && !error && (
+          <div className="space-y-3">
+            {(compareData?.sections || []).map((section) => (
+              <CompareSection
+                key={section.id}
+                section={section}
+                insight={insightMap[section.id]}
+                mode={mode}
+                hideUnchanged={hideUnchanged}
+                query={query}
+                open={Boolean(openSections[section.id])}
+                onToggle={() => toggleSection(section.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

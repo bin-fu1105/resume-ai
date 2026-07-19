@@ -12,11 +12,11 @@ function RewriteButton({ loading, disabled, onClick, disabledReason }) {
         disabled={isDisabled}
         aria-describedby={showTooltip ? "rewrite-disabled-tooltip" : undefined}
         aria-busy={loading}
-        aria-label={loading ? "Rewriting resume" : "Rewrite resume"}
+        aria-label={loading ? "Optimizing resume" : "Optimize resume"}
         className="btn-secondary"
       >
         {loading ? (
-          <Spinner className="h-4 w-4 text-accent" label="Rewriting" />
+          <Spinner className="h-4 w-4 text-accent" label="Optimizing" />
         ) : (
           <svg
             className="h-4 w-4"
@@ -32,7 +32,7 @@ function RewriteButton({ loading, disabled, onClick, disabledReason }) {
             <path d="M18.375 2.625a2.121 2.121 0 113 3L12 15l-4 1 1-4 9.375-9.375z" />
           </svg>
         )}
-        {loading ? "Rewriting..." : "Rewrite Resume"}
+        {loading ? "Optimizing..." : "Optimize Resume"}
       </button>
 
       {showTooltip && (

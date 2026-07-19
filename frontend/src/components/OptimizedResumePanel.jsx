@@ -90,6 +90,7 @@ function OptimizedResumePanel({
   const experience = rewrite.experience || [];
   const projects = rewrite.projects || [];
   const skills = rewrite.skills || [];
+  const education = rewrite.education || [];
 
   const handleCopyAll = async () => {
     try {
@@ -188,6 +189,17 @@ function OptimizedResumePanel({
           </div>
         ) : (
           <p className="text-sm text-muted">No skills generated.</p>
+        )}
+      </RewriteSectionCard>
+
+      <RewriteSectionCard
+        title="Education"
+        copyText={education.map((item) => `• ${item}`).join("\n")}
+      >
+        {education.length > 0 ? (
+          <BulletList items={education} />
+        ) : (
+          <p className="text-sm text-muted">No education items generated.</p>
         )}
       </RewriteSectionCard>
     </div>

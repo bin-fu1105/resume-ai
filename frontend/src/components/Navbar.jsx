@@ -46,7 +46,7 @@ function Navbar({ activeTab = "dashboard", onTabChange }) {
 
         <nav
           aria-label="Primary"
-          className="flex items-center gap-3 text-sm font-medium text-muted sm:gap-5"
+          className="-mx-1 flex max-w-[60vw] items-center gap-1 overflow-x-auto px-1 text-sm font-medium text-muted sm:max-w-none sm:gap-4"
         >
           <NavLink
             href="#workspace"
@@ -56,13 +56,6 @@ function Navbar({ activeTab = "dashboard", onTabChange }) {
             Workspace
           </NavLink>
           <NavLink
-            href="#results"
-            active={activeTab === "dashboard"}
-            onClick={goTab("dashboard")}
-          >
-            Results
-          </NavLink>
-          <NavLink
             href="#heatmap"
             active={activeTab === "heatmap"}
             onClick={goTab("heatmap")}
@@ -70,11 +63,19 @@ function Navbar({ activeTab = "dashboard", onTabChange }) {
             Heatmap
           </NavLink>
           <NavLink
-            href="#compare"
-            active={activeTab === "compare"}
-            onClick={goTab("compare")}
+            href="#optimize"
+            active={activeTab === "optimize"}
+            onClick={goTab("optimize")}
           >
-            Compare
+            <span
+              className={
+                activeTab === "optimize"
+                  ? ""
+                  : "rounded-md bg-accent-soft px-2 py-1 text-accent"
+              }
+            >
+              Optimize
+            </span>
           </NavLink>
           <NavLink
             href="#interview"
