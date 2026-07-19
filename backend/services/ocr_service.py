@@ -77,6 +77,7 @@ def probe_ocr_runtime() -> dict:
         "engine_ready": _ocr_engine is not None,
         "paddleocr_installed": False,
         "rapidocr_installed": False,
+        "claude_vision_available": bool(os.getenv("ANTHROPIC_API_KEY")),
         "paddleocr_import_error": None,
         "rapidocr_import_error": None,
         "init_error": None,
@@ -145,6 +146,8 @@ def _init_paddleocr():
 
 
 def _init_rapidocr():
+    # Prefer headless OpenCV on serverless (no libxcb).
+    os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "0")
     from rapidocr_onnxruntime import RapidOCR
 
     engine = RapidOCR()
@@ -153,21 +156,90 @@ def _init_rapidocr():
     return engine
 
 
+class _ClaudeVisionOcr:
+    """Vercel-safe OCR fallback using Anthropic vision (no native GUI libs)."""
+
+    def __call__(self, image_path: str):
+        import base64
+        import mimetypes
+
+        import anthropic
+
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not configured for Claude OCR.")
+
+        mime, _ = mimetypes.guess_type(image_path)
+        if mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+            mime = "image/png"
+
+        with open(image_path, "rb") as handle:
+            encoded = base64.standard_b64encode(handle.read()).decode("utf-8")
+
+        client = anthropic.Anthropic(api_key=api_key)
+        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+        message = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": encoded,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Extract all readable text from this resume image. "
+                                "Return plain text only, preserving reading order. "
+                                "Do not add commentary."
+                            ),
+                        },
+                    ],
+                }
+            ],
+        )
+        chunks: list[str] = []
+        for block in message.content:
+            text = getattr(block, "text", None)
+            if text:
+                chunks.append(text)
+        text = "\n".join(chunks).strip()
+        if not text:
+            return [], 0.0
+        # Match RapidOCR shape: list of [box, text, score]
+        return [[[0, 0], text, 1.0]], 0.0
+
+
+def _init_claude_ocr():
+    engine = _ClaudeVisionOcr()
+    logger.info("Claude vision OCR initialized successfully")
+    print("Claude vision OCR initialized successfully", flush=True)
+    return engine
+
+
 def _get_ocr_engine():
-    """Lazy-load OCR. Prefer PaddleOCR; fall back to RapidOCR for Vercel size limits."""
+    """Lazy-load OCR: PaddleOCR -> RapidOCR -> Claude vision."""
     global _ocr_engine, _ocr_backend
     if _ocr_engine is not None and _ocr_backend is not None:
         logger.info("OCR engine reuse backend=%s", _ocr_backend)
         return _ocr_engine, _ocr_backend
 
-    paddle_error = None
+    errors: list[str] = []
+
     try:
         print("OCR ENGINE INIT: trying PaddleOCR", flush=True)
         _ocr_engine = _init_paddleocr()
         _ocr_backend = "paddleocr"
         return _ocr_engine, _ocr_backend
     except Exception as exc:
-        paddle_error = exc
+        errors.append(f"PaddleOCR: {_format_exception(exc)}")
         logger.warning("PaddleOCR unavailable: %s", _format_exception(exc))
         print(
             f"OCR ENGINE INIT: PaddleOCR unavailable: {_format_exception(exc)}",
@@ -179,12 +251,24 @@ def _get_ocr_engine():
         _ocr_engine = _init_rapidocr()
         _ocr_backend = "rapidocr"
         return _ocr_engine, _ocr_backend
-    except Exception as rapid_error:
+    except Exception as exc:
+        errors.append(f"RapidOCR: {_format_exception(exc)}")
+        logger.warning("RapidOCR unavailable: %s", _format_exception(exc))
+        print(
+            f"OCR ENGINE INIT: RapidOCR unavailable: {_format_exception(exc)}",
+            flush=True,
+        )
+
+    try:
+        print("OCR ENGINE INIT: trying Claude vision OCR", flush=True)
+        _ocr_engine = _init_claude_ocr()
+        _ocr_backend = "claude_vision"
+        return _ocr_engine, _ocr_backend
+    except Exception as exc:
+        errors.append(f"ClaudeVision: {_format_exception(exc)}")
         _raise_ocr_error(
-            "OCR unavailable (PaddleOCR and RapidOCR both failed). "
-            f"PaddleOCR: {_format_exception(paddle_error) if paddle_error else 'n/a'}; "
-            f"RapidOCR: {_format_exception(rapid_error)}",
-            rapid_error,
+            "OCR unavailable (all engines failed). " + " | ".join(errors),
+            exc,
         )
         raise  # pragma: no cover
 
@@ -297,10 +381,11 @@ def _ocr_image(image_path: str, deadline: float | None = None) -> str:
             )
         lines = _lines_from_paddle_result(result)
     else:
+        # RapidOCR and Claude vision both expose engine(image_path) -> (rows, elapse)
         try:
             rapid_result, _elapse = engine(image_path)
         except Exception as exc:
-            _raise_ocr_error("OCR runtime failed (RapidOCR)", exc)
+            _raise_ocr_error(f"OCR runtime failed ({backend})", exc)
             raise  # pragma: no cover
         lines = _lines_from_rapid_result(rapid_result)
 
