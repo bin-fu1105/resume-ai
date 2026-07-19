@@ -1,0 +1,48 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "./frontend",
+      "framework": "vite"
+    },
+    "backend": {
+      "root": "./backend",
+      "framework": "fastapi",
+      "entrypoint": "main:app"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/upload",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/analyze",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/rewrite",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/chat",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/compare",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/compare-jobs",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/interview/(.*)",
+      "destination": { "service": "backend" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "frontend" }
+    }
+  ]
+}
