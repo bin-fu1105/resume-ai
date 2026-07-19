@@ -1,13 +1,14 @@
+import logging
 import os
+import tempfile
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
-import logging
 
 from services.chat_service import ChatService
 from services.claude_service import ClaudeService, ClaudeServiceError
@@ -37,11 +38,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# Parsed resume text keyed by upload id. Temp files are deleted after parsing;
+# Vercel serverless cannot persist project-local upload directories.
+_RESUME_TEXT_CACHE: dict[str, str] = {}
 
 claude_service = ClaudeService()
 rewrite_service = RewriteService()
@@ -117,17 +119,24 @@ class CompareJobsRequest(BaseModel):
 
 def _resolve_resume_text(filename: str) -> tuple[str, str]:
     safe_name = Path(filename).name
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
+    resume_text = _RESUME_TEXT_CACHE.get(safe_name)
 
-    if not os.path.isfile(file_path):
+    if not resume_text:
         raise HTTPException(status_code=404, detail="Uploaded file not found.")
 
-    try:
-        resume_text = extract_resume_text(file_path)
-    except ResumeParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     return safe_name, resume_text
+
+
+def _store_upload_temporarily(content: bytes, extension: str) -> str:
+    """Write bytes to the OS temp dir and return the path. Caller must delete."""
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=extension,
+        dir=tempfile.gettempdir(),
+        prefix="resume_",
+    ) as tmp:
+        tmp.write(content)
+        return tmp.name
 
 
 @app.get("/")
@@ -139,7 +148,7 @@ def home():
 
 @app.post("/upload")
 async def upload_resume(file: UploadFile = File(...)):
-    """Upload a resume file. Validates type/size and saves to uploads/."""
+    """Upload a resume, parse text in a temp file, then discard the file."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided.")
 
@@ -165,10 +174,19 @@ async def upload_resume(file: UploadFile = File(...)):
         )
 
     stored_name = f"{uuid.uuid4().hex}_{original_name}"
-    file_path = os.path.join(UPLOAD_DIR, stored_name)
+    temp_path = None
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
+    try:
+        temp_path = _store_upload_temporarily(content, extension)
+        resume_text = extract_resume_text(temp_path)
+    except ResumeParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if temp_path:
+            with suppress(OSError):
+                os.unlink(temp_path)
+
+    _RESUME_TEXT_CACHE[stored_name] = resume_text
 
     return {
         "filename": stored_name,
@@ -181,16 +199,7 @@ async def upload_resume(file: UploadFile = File(...)):
 @app.post("/analyze")
 async def analyze_resume(payload: AnalyzeRequest):
     """Analyze an uploaded resume with Claude using extracted text + JD."""
-    safe_name = Path(payload.filename).name
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Uploaded file not found.")
-
-    try:
-        resume_text = extract_resume_text(file_path)
-    except ResumeParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    safe_name, resume_text = _resolve_resume_text(payload.filename)
 
     try:
         analysis = claude_service.analyze_resume(
@@ -215,16 +224,7 @@ async def rewrite_resume(payload: RewriteRequest):
             detail="Job description is required for rewrite.",
         )
 
-    safe_name = Path(payload.filename).name
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Uploaded file not found.")
-
-    try:
-        resume_text = extract_resume_text(file_path)
-    except ResumeParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _, resume_text = _resolve_resume_text(payload.filename)
 
     try:
         rewrite = rewrite_service.rewrite_resume(
@@ -244,16 +244,7 @@ async def career_coach_chat(payload: ChatRequest):
     if not payload.message.strip():
         raise HTTPException(status_code=400, detail="Chat message is required.")
 
-    safe_name = Path(payload.filename).name
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Uploaded file not found.")
-
-    try:
-        resume_text = extract_resume_text(file_path)
-    except ResumeParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _, resume_text = _resolve_resume_text(payload.filename)
 
     try:
         reply = chat_service.chat(
@@ -281,16 +272,7 @@ async def compare_resume_versions(payload: CompareRequest):
             detail="Rewrite result is required for compare.",
         )
 
-    safe_name = Path(payload.filename).name
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
-
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail="Uploaded file not found.")
-
-    try:
-        resume_text = extract_resume_text(file_path)
-    except ResumeParseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _, resume_text = _resolve_resume_text(payload.filename)
 
     return compare_resumes(resume_text, payload.rewrite)
 
